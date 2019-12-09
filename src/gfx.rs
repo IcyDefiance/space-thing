@@ -1,7 +1,7 @@
 pub mod window;
 
 use ash::{
-	extensions::ext,
+	extensions::{ext, khr},
 	version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
 	vk, vk_make_version, Device, Entry, Instance,
 };
@@ -16,8 +16,13 @@ pub struct Gfx {
 	entry: Entry,
 	instance: Instance,
 	debug_utils: ext::DebugUtils,
+	khr_surface: khr::Surface,
+	khr_win32_surface: khr::Win32Surface,
 	debug_messenger: vk::DebugUtilsMessengerEXT,
+	physical_device: vk::PhysicalDevice,
+	queue_family: u32,
 	device: Device,
+	khr_swapchain: khr::Swapchain,
 	queue: vk::Queue,
 }
 impl Gfx {
@@ -30,8 +35,11 @@ impl Gfx {
 			env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap(),
 			env!("CARGO_PKG_VERSION_PATCH").parse::<u32>().unwrap()
 		));
-
-		let exts = [b"VK_EXT_debug_utils\0".as_ptr() as _];
+		let exts = [
+			b"VK_EXT_debug_utils\0".as_ptr() as _,
+			b"VK_KHR_surface\0".as_ptr() as _,
+			b"VK_KHR_win32_surface\0".as_ptr() as _,
+		];
 		let layers_pref = hashset! { CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_standard_validation\0").unwrap() };
 		let layers = entry.enumerate_instance_extension_properties().unwrap();
 		let layers = layers
@@ -46,29 +54,48 @@ impl Gfx {
 			.enabled_layer_names(&layers)
 			.enabled_extension_names(&exts);
 		let instance = unsafe { entry.create_instance(&ci, None) }.unwrap();
-
 		let debug_utils = ext::DebugUtils::new(&entry, &instance);
+		let khr_surface = khr::Surface::new(&entry, &instance);
+		let khr_win32_surface = khr::Win32Surface::new(&entry, &instance);
+
 		let ci = vk::DebugUtilsMessengerCreateInfoEXT::builder()
 			.message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
 			.message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
 			.pfn_user_callback(Some(user_callback));
 		let debug_messenger = unsafe { debug_utils.create_debug_utils_messenger(&ci, None) }.unwrap();
 
-		let pdevice = unsafe { instance.enumerate_physical_devices() }.unwrap()[0];
+		let physical_device = unsafe { instance.enumerate_physical_devices() }.unwrap()[0];
 
-		let qfam = unsafe { instance.get_physical_device_queue_family_properties(pdevice) }
+		let queue_family = unsafe { instance.get_physical_device_queue_family_properties(physical_device) }
 			.into_iter()
 			.enumerate()
 			.filter(|(_, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS))
 			.next()
 			.unwrap()
 			.0 as u32;
-		let qci = [vk::DeviceQueueCreateInfo::builder().queue_family_index(qfam).queue_priorities(&[1.0]).build()];
-		let ci = vk::DeviceCreateInfo::builder().queue_create_infos(&qci);
-		let device = unsafe { instance.create_device(pdevice, &ci, None) }.unwrap();
-		let queue = unsafe { device.get_device_queue(qfam, 0) };
+		let qci =
+			[vk::DeviceQueueCreateInfo::builder().queue_family_index(queue_family).queue_priorities(&[1.0]).build()];
 
-		Arc::new(Self { entry, instance, debug_utils, debug_messenger, device, queue })
+		let exts = [b"VK_KHR_swapchain\0".as_ptr() as _];
+		let ci = vk::DeviceCreateInfo::builder().queue_create_infos(&qci).enabled_extension_names(&exts);
+		let device = unsafe { instance.create_device(physical_device, &ci, None) }.unwrap();
+		let khr_swapchain = khr::Swapchain::new(&instance, &device);
+
+		let queue = unsafe { device.get_device_queue(queue_family, 0) };
+
+		Arc::new(Self {
+			entry,
+			instance,
+			debug_utils,
+			khr_surface,
+			khr_win32_surface,
+			debug_messenger,
+			physical_device,
+			queue_family,
+			device,
+			khr_swapchain,
+			queue,
+		})
 	}
 }
 impl Drop for Gfx {
