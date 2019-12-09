@@ -9,6 +9,8 @@ build = "build.rs"
 
 [dependencies]
 ash = "0.29.0"
+futures = { version = "0.3.1", features = ["thread-pool"] }
+lazy_static = "1.4.0"
 log = "0.4.8"
 maplit = "1.0.2"
 raw-window-handle = "0.3.3"

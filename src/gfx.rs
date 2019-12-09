@@ -1,14 +1,18 @@
 pub mod window;
 
+use crate::{fs::read_bytes, threads::FILE_THREAD};
 use ash::{
 	extensions::{ext, khr},
 	version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
 	vk, vk_make_version, Device, Entry, Instance,
 };
+use futures::task::SpawnExt;
 use maplit::hashset;
 use std::{
 	collections::HashSet,
 	ffi::{c_void, CStr, CString},
+	fs::File,
+	io::{self, prelude::*},
 	sync::Arc,
 };
 
@@ -26,7 +30,11 @@ pub struct Gfx {
 	queue: vk::Queue,
 }
 impl Gfx {
-	pub fn new() -> Arc<Self> {
+	pub async fn new() -> Arc<Self> {
+		// start reading files now to use later
+		let vert_spv = read_bytes("build/shader.vert.spv");
+		let frag_spv = read_bytes("build/shader.frag.spv");
+
 		let entry = Entry::new().unwrap();
 
 		let name = CString::new(env!("CARGO_PKG_NAME")).unwrap();
@@ -82,6 +90,9 @@ impl Gfx {
 		let khr_swapchain = khr::Swapchain::new(&instance, &device);
 
 		let queue = unsafe { device.get_device_queue(queue_family, 0) };
+
+		let vert_spv = vert_spv.await.unwrap();
+		let frag_spv = frag_spv.await.unwrap();
 
 		Arc::new(Self {
 			entry,
