@@ -20,12 +20,27 @@ impl Window {
 		let window = WindowBuilder::new().with_dimensions((1440, 810).into()).build(&events_loop).unwrap();
 
 		let surface = match window.raw_window_handle() {
+			#[cfg(windows)]
 			RawWindowHandle::Windows(handle) => {
 				let ci = vk::Win32SurfaceCreateInfoKHR::builder().hinstance(handle.hinstance).hwnd(handle.hwnd);
 				unsafe { gfx.khr_win32_surface.create_win32_surface(&ci, None) }.unwrap()
 			},
+			#[cfg(unix)]
+			RawWindowHandle::Xlib(handle) => {
+				println!("{:?}", handle);
+				let ci = vk::XlibSurfaceCreateInfoKHR::builder().dpy(handle.display as _).window(handle.window);
+				unsafe { gfx.khr_xlib_surface.create_xlib_surface(&ci, None) }.unwrap()
+			},
+			#[cfg(unix)]
+			RawWindowHandle::Wayland(handle) => {
+				let ci = vk::WaylandSurfaceCreateInfoKHR::builder().display(handle.display).surface(handle.surface);
+				unsafe { gfx.khr_wayland_surface.create_wayland_surface(&ci, None) }.unwrap()
+			},
 			_ => unimplemented!(),
 		};
+		assert!(unsafe {
+			gfx.khr_surface.get_physical_device_surface_support(gfx.physical_device, gfx.queue_family, surface)
+		});
 
 		let caps =
 			unsafe { gfx.khr_surface.get_physical_device_surface_capabilities(gfx.physical_device, surface) }.unwrap();

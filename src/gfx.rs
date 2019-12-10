@@ -21,7 +21,12 @@ pub struct Gfx {
 	instance: Instance,
 	debug_utils: ext::DebugUtils,
 	khr_surface: khr::Surface,
+	#[cfg(windows)]
 	khr_win32_surface: khr::Win32Surface,
+	#[cfg(unix)]
+	khr_xlib_surface: khr::XlibSurface,
+	#[cfg(unix)]
+	khr_wayland_surface: khr::WaylandSurface,
 	debug_messenger: vk::DebugUtilsMessengerEXT,
 	physical_device: vk::PhysicalDevice,
 	queue_family: u32,
@@ -43,11 +48,12 @@ impl Gfx {
 			env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap(),
 			env!("CARGO_PKG_VERSION_PATCH").parse::<u32>().unwrap()
 		));
-		let exts = [
-			b"VK_EXT_debug_utils\0".as_ptr() as _,
-			b"VK_KHR_surface\0".as_ptr() as _,
-			b"VK_KHR_win32_surface\0".as_ptr() as _,
-		];
+		let mut exts = vec![b"VK_EXT_debug_utils\0".as_ptr() as _, b"VK_KHR_surface\0".as_ptr() as _];
+		if cfg!(windows) {
+			exts.push(b"VK_KHR_win32_surface\0".as_ptr() as _);
+		} else {
+			exts.push(b"VK_KHR_xlib_surface\0".as_ptr() as _);
+		}
 		let layers_pref = hashset! { CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_standard_validation\0").unwrap() };
 		let layers = entry.enumerate_instance_extension_properties().unwrap();
 		let layers = layers
@@ -64,7 +70,12 @@ impl Gfx {
 		let instance = unsafe { entry.create_instance(&ci, None) }.unwrap();
 		let debug_utils = ext::DebugUtils::new(&entry, &instance);
 		let khr_surface = khr::Surface::new(&entry, &instance);
+		#[cfg(windows)]
 		let khr_win32_surface = khr::Win32Surface::new(&entry, &instance);
+		#[cfg(unix)]
+		let khr_xlib_surface = khr::XlibSurface::new(&entry, &instance);
+		#[cfg(unix)]
+		let khr_wayland_surface = khr::WaylandSurface::new(&entry, &instance);
 
 		let ci = vk::DebugUtilsMessengerCreateInfoEXT::builder()
 			.message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
@@ -99,7 +110,12 @@ impl Gfx {
 			instance,
 			debug_utils,
 			khr_surface,
+			#[cfg(windows)]
 			khr_win32_surface,
+			#[cfg(unix)]
+			khr_xlib_surface,
+			#[cfg(unix)]
+			khr_wayland_surface,
 			debug_messenger,
 			physical_device,
 			queue_family,
