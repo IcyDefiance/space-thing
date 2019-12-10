@@ -13,6 +13,8 @@ use std::{
 	ffi::{c_void, CStr, CString},
 	fs::File,
 	io::{self, prelude::*},
+	mem::transmute,
+	slice,
 	sync::Arc,
 };
 
@@ -33,6 +35,8 @@ pub struct Gfx {
 	device: Device,
 	khr_swapchain: khr::Swapchain,
 	queue: vk::Queue,
+	vshader: vk::ShaderModule,
+	fshader: vk::ShaderModule,
 }
 impl Gfx {
 	pub async fn new() -> Arc<Self> {
@@ -102,8 +106,8 @@ impl Gfx {
 
 		let queue = unsafe { device.get_device_queue(queue_family, 0) };
 
-		let vert_spv = vert_spv.await.unwrap();
-		let frag_spv = frag_spv.await.unwrap();
+		let vshader = create_shader(&device, &vert_spv.await.unwrap());
+		let fshader = create_shader(&device, &frag_spv.await.unwrap());
 
 		Arc::new(Self {
 			entry,
@@ -122,17 +126,27 @@ impl Gfx {
 			device,
 			khr_swapchain,
 			queue,
+			vshader,
+			fshader,
 		})
 	}
 }
 impl Drop for Gfx {
 	fn drop(&mut self) {
 		unsafe {
+			self.device.destroy_shader_module(self.fshader, None);
+			self.device.destroy_shader_module(self.vshader, None);
 			self.device.destroy_device(None);
 			self.debug_utils.destroy_debug_utils_messenger(self.debug_messenger, None);
 			self.instance.destroy_instance(None);
 		}
 	}
+}
+
+fn create_shader(device: &Device, code: &[u8]) -> vk::ShaderModule {
+	let code = unsafe { slice::from_raw_parts(code.as_ptr() as _, code.len() / 4) };
+	let ci = vk::ShaderModuleCreateInfo::builder().code(code);
+	unsafe { device.create_shader_module(&ci, None) }.unwrap()
 }
 
 unsafe extern "system" fn user_callback(

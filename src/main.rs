@@ -5,7 +5,7 @@ mod threads;
 use futures::executor::block_on;
 use gfx::{window::Window, Gfx};
 use simplelog::{LevelFilter, SimpleLogger};
-use winit::{ControlFlow, Event, EventsLoop, WindowEvent};
+use winit::{Event, EventsLoop, WindowEvent};
 
 fn main() {
 	block_on(amain());
@@ -17,10 +17,18 @@ async fn amain() {
 	let gfx = Gfx::new().await;
 
 	let mut events_loop = EventsLoop::new();
-	let window = Window::new(&gfx, &events_loop);
+	let mut window = Window::new(&gfx, &events_loop);
 
-	events_loop.run_forever(|event| match event {
-		Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => ControlFlow::Break,
-		_ => ControlFlow::Continue,
-	});
+	loop {
+		let mut exit = false;
+		events_loop.poll_events(|event| match event {
+			Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => exit = true,
+			_ => (),
+		});
+		if exit {
+			break;
+		}
+
+		window.draw();
+	}
 }
