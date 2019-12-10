@@ -58,11 +58,14 @@ impl Gfx {
 		} else {
 			exts.push(b"VK_KHR_xlib_surface\0".as_ptr() as _);
 		}
-		let layers_pref = hashset! { CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_standard_validation\0").unwrap() };
-		let layers = entry.enumerate_instance_extension_properties().unwrap();
+		let layers_pref = hashset! {
+			CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_standard_validation\0").unwrap(),
+			CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_monitor\0").unwrap(),
+		};
+		let layers = entry.enumerate_instance_layer_properties().unwrap();
 		let layers = layers
 			.iter()
-			.map(|props| unsafe { CStr::from_ptr(props.extension_name.as_ptr()) })
+			.map(|props| unsafe { CStr::from_ptr(props.layer_name.as_ptr()) })
 			.collect::<HashSet<_>>()
 			.intersection(&layers_pref)
 			.map(|ext| ext.as_ptr())
