@@ -3,7 +3,11 @@ mod gfx;
 mod threads;
 
 use futures::executor::block_on;
-use gfx::{window::Window, Gfx};
+use gfx::{
+	buffer::{BufferUsageFlags, ImmutableBuffer},
+	window::{Vertex, Window},
+	Gfx,
+};
 use simplelog::{LevelFilter, SimpleLogger};
 use winit::{Event, EventsLoop, WindowEvent};
 

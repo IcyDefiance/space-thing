@@ -1,9 +1,15 @@
-use crate::gfx::Gfx;
+use crate::gfx::{
+	buffer::{BufferUsageFlags, ImmutableBuffer},
+	Gfx,
+};
 use ash::{version::DeviceV1_0, vk};
+use memoffset::offset_of;
+use nalgebra::{Vector2, Vector3};
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::{
 	cmp::{max, min},
 	ffi::CStr,
+	mem::size_of,
 	slice,
 	sync::Arc,
 	u32, u64,
@@ -18,6 +24,7 @@ pub struct Window {
 	layout: vk::PipelineLayout,
 	render_pass: vk::RenderPass,
 	command_pool: vk::CommandPool,
+	vertices: ImmutableBuffer<[Vertex]>,
 	swapchain: vk::SwapchainKHR,
 	image_views: Vec<vk::ImageView>,
 	pipeline: vk::Pipeline,
@@ -98,12 +105,20 @@ impl Window {
 		let ci = vk::CommandPoolCreateInfo::builder().queue_family_index(gfx.queue_family);
 		let command_pool = unsafe { gfx.device.create_command_pool(&ci, None) }.unwrap();
 
+		let vertices = [
+			Vertex { pos: [0.0, -0.5].into(), color: [1.0, 0.0, 0.0].into() },
+			Vertex { pos: [0.5, 0.5].into(), color: [0.0, 1.0, 0.0].into() },
+			Vertex { pos: [-0.5, 0.5].into(), color: [0.0, 0.0, 1.0].into() },
+		];
+		let vertices = ImmutableBuffer::from_slice(&gfx, &vertices, BufferUsageFlags::VERTEX_BUFFER);
+
 		let (caps, image_extent) = get_caps(&gfx, surface, &window);
 		let (swapchain, image_views) =
 			create_swapchain(&gfx, surface, &caps, &surface_format, image_extent, vk::SwapchainKHR::null());
 		let pipeline = create_pipeline(&gfx, image_extent, layout, render_pass);
 		let framebuffers = create_framebuffers(&gfx, &image_views, render_pass, image_extent);
-		let command_buffers = create_cmds(&gfx, command_pool, &framebuffers, render_pass, image_extent, pipeline);
+		let command_buffers =
+			create_cmds(&gfx, command_pool, &framebuffers, render_pass, image_extent, pipeline, &vertices);
 
 		let image_available = framebuffers
 			.iter()
@@ -135,6 +150,7 @@ impl Window {
 			pipeline,
 			framebuffers,
 			command_pool,
+			vertices,
 			command_buffers,
 			image_available,
 			render_finished,
@@ -215,6 +231,7 @@ impl Window {
 			self.render_pass,
 			image_extent,
 			self.pipeline,
+			&self.vertices,
 		);
 	}
 }
@@ -224,6 +241,7 @@ impl Drop for Window {
 			// this is equivalent to `(self.frame - 1) mod 2` and avoids unsigned integer overflow
 			let frame = (self.frame + 1) % 2;
 			self.gfx.device.wait_for_fences(&self.frame_finished[frame..frame + 1], false, u64::MAX).unwrap();
+
 			for &fence in &self.frame_finished {
 				self.gfx.device.destroy_fence(fence, None);
 			}
@@ -234,19 +252,52 @@ impl Drop for Window {
 				self.gfx.device.destroy_semaphore(semaphore, None);
 			}
 			self.gfx.device.free_command_buffers(self.command_pool, &self.command_buffers);
-			self.gfx.device.destroy_command_pool(self.command_pool, None);
 			for &framebuffer in &self.framebuffers {
 				self.gfx.device.destroy_framebuffer(framebuffer, None);
 			}
 			self.gfx.device.destroy_pipeline(self.pipeline, None);
-			self.gfx.device.destroy_render_pass(self.render_pass, None);
-			self.gfx.device.destroy_pipeline_layout(self.layout, None);
 			for &image_view in &self.image_views {
 				self.gfx.device.destroy_image_view(image_view, None);
 			}
 			self.gfx.khr_swapchain.destroy_swapchain(self.swapchain, None);
+			self.gfx.device.destroy_command_pool(self.command_pool, None);
+			self.gfx.device.destroy_render_pass(self.render_pass, None);
+			self.gfx.device.destroy_pipeline_layout(self.layout, None);
 			self.gfx.khr_surface.destroy_surface(self.surface, None);
 		}
+	}
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct Vertex {
+	pub pos: Vector2<f32>,
+	pub color: Vector3<f32>,
+}
+impl Vertex {
+	fn binding_desc() -> vk::VertexInputBindingDescription {
+		vk::VertexInputBindingDescription::builder()
+			.binding(0)
+			.stride(size_of::<Vertex>() as _)
+			.input_rate(vk::VertexInputRate::VERTEX)
+			.build()
+	}
+
+	fn attribute_descs() -> [vk::VertexInputAttributeDescription; 2] {
+		[
+			vk::VertexInputAttributeDescription::builder()
+				.binding(0)
+				.location(0)
+				.format(vk::Format::R32G32_SFLOAT)
+				.offset(offset_of!(Self, pos) as _)
+				.build(),
+			vk::VertexInputAttributeDescription::builder()
+				.binding(0)
+				.location(1)
+				.format(vk::Format::R32G32B32_SFLOAT)
+				.offset(offset_of!(Self, color) as _)
+				.build(),
+		]
 	}
 }
 
@@ -344,7 +395,11 @@ fn create_pipeline(
 			.name(CStr::from_bytes_with_nul(b"main\0").unwrap())
 			.build(),
 	];
-	let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
+	let vertex_binding_descriptions = [Vertex::binding_desc()];
+	let vertex_attribute_descriptions = Vertex::attribute_descs();
+	let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+		.vertex_binding_descriptions(&vertex_binding_descriptions)
+		.vertex_attribute_descriptions(&vertex_attribute_descriptions);
 	let input_assembly_state =
 		vk::PipelineInputAssemblyStateCreateInfo::builder().topology(vk::PrimitiveTopology::TRIANGLE_LIST);
 	let viewports = [vk::Viewport::builder()
@@ -405,6 +460,7 @@ fn create_cmds(
 	render_pass: vk::RenderPass,
 	image_extent: vk::Extent2D,
 	pipeline: vk::Pipeline,
+	vertsbuf: &ImmutableBuffer<[Vertex]>,
 ) -> Vec<vk::CommandBuffer> {
 	let ci = vk::CommandBufferAllocateInfo::builder()
 		.command_pool(command_pool)
@@ -422,6 +478,9 @@ fn create_cmds(
 				.clear_values(&[vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } }]);
 			gfx.device.cmd_begin_render_pass(cmd, &ci, vk::SubpassContents::INLINE);
 			gfx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+
+			gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[vertsbuf.buf], &[0]);
+
 			gfx.device.cmd_draw(cmd, 3, 1, 0, 0);
 			gfx.device.cmd_end_render_pass(cmd);
 

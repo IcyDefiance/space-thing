@@ -1,19 +1,16 @@
+pub mod buffer;
 pub mod window;
 
-use crate::{fs::read_bytes, threads::FILE_THREAD};
+use crate::fs::read_bytes;
 use ash::{
 	extensions::{ext, khr},
 	version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
 	vk, vk_make_version, Device, Entry, Instance,
 };
-use futures::task::SpawnExt;
 use maplit::hashset;
 use std::{
 	collections::HashSet,
 	ffi::{c_void, CStr, CString},
-	fs::File,
-	io::{self, prelude::*},
-	mem::transmute,
 	slice,
 	sync::Arc,
 };
@@ -31,6 +28,7 @@ pub struct Gfx {
 	khr_wayland_surface: khr::WaylandSurface,
 	debug_messenger: vk::DebugUtilsMessengerEXT,
 	physical_device: vk::PhysicalDevice,
+	memory_properties: vk::PhysicalDeviceMemoryProperties,
 	queue_family: u32,
 	device: Device,
 	khr_swapchain: khr::Swapchain,
@@ -91,6 +89,7 @@ impl Gfx {
 		let debug_messenger = unsafe { debug_utils.create_debug_utils_messenger(&ci, None) }.unwrap();
 
 		let physical_device = unsafe { instance.enumerate_physical_devices() }.unwrap()[0];
+		let memory_properties = unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
 		let queue_family = unsafe { instance.get_physical_device_queue_family_properties(physical_device) }
 			.into_iter()
@@ -125,6 +124,7 @@ impl Gfx {
 			khr_wayland_surface,
 			debug_messenger,
 			physical_device,
+			memory_properties,
 			queue_family,
 			device,
 			khr_swapchain,
