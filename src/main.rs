@@ -29,6 +29,8 @@ async fn amain() {
 			break;
 		}
 
-		window.draw();
+		if window.draw() {
+			window.recreate_swapchain();
+		}
 	}
 }
