@@ -7,14 +7,14 @@ use ash::{version::DeviceV1_0, vk};
 use std::{mem::size_of, slice, sync::Arc};
 
 pub struct ImmutableBuffer<T: ?Sized> {
-	gfx: Arc<Gfx>,
+	pub(super) gfx: Arc<Gfx>,
 	pub(super) buf: vk::Buffer,
 	mem: vk::DeviceMemory,
 	pub(super) len: usize,
 	_phantom: PhantomData<Box<T>>,
 }
 impl<T: Clone> ImmutableBuffer<[T]> {
-	pub async fn from_slice(gfx: &Arc<Gfx>, data: &[T], usage: BufferUsageFlags) -> Self {
+	pub async fn from_slice(gfx: Arc<Gfx>, data: &[T], usage: BufferUsageFlags) -> Self {
 		unsafe {
 			let len = data.len();
 			let size = size_of::<T>() as u64 * len as u64;
@@ -38,18 +38,18 @@ impl<T: Clone> ImmutableBuffer<[T]> {
 				vk::MemoryPropertyFlags::DEVICE_LOCAL,
 			);
 
-			let fence = Fence::new(&gfx, false);
+			let fence = Fence::new(gfx.clone(), false);
 
 			let ci = vk::CommandBufferAllocateInfo::builder()
 				.command_pool(gfx.cmdpool_transient)
 				.level(vk::CommandBufferLevel::PRIMARY)
 				.command_buffer_count(1);
-			let cmd = gfx.device.allocate_command_buffers(&ci).unwrap()[0];
+			let cmds = gfx.device.allocate_command_buffers(&ci).unwrap();
+			let cmd = cmds[0];
 			gfx.device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::builder()).unwrap();
 			gfx.device.cmd_copy_buffer(cmd, cpubuf, buf, &[vk::BufferCopy::builder().size(size).build()]);
 			gfx.device.end_command_buffer(cmd).unwrap();
 
-			let cmds = [cmd];
 			let submits = [vk::SubmitInfo::builder().command_buffers(&cmds).build()];
 			gfx.device.queue_submit(gfx.queue, &submits, fence.vk).unwrap();
 
@@ -59,7 +59,7 @@ impl<T: Clone> ImmutableBuffer<[T]> {
 			gfx.device.destroy_buffer(cpubuf, None);
 			gfx.device.free_memory(cpumem, None);
 
-			Self { gfx: gfx.clone(), buf, mem, len, _phantom: PhantomData }
+			Self { gfx, buf, mem, len, _phantom: PhantomData }
 		}
 	}
 }

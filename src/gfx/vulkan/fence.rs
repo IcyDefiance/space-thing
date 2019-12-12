@@ -14,11 +14,11 @@ pub struct Fence {
 	pub(in super::super) vk: vk::Fence,
 }
 impl Fence {
-	pub fn new(gfx: &Arc<Gfx>, signalled: bool) -> Self {
+	pub fn new(gfx: Arc<Gfx>, signalled: bool) -> Self {
 		// TODO: maybe use fence pool
 		let flags = if signalled { vk::FenceCreateFlags::SIGNALED } else { vk::FenceCreateFlags::empty() };
 		let vk = unsafe { gfx.device.create_fence(&vk::FenceCreateInfo::builder().flags(flags), None) }.unwrap();
-		Self { gfx: gfx.clone(), vk }
+		Self { gfx, vk }
 	}
 
 	pub fn reset(&self) {

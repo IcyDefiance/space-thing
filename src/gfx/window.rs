@@ -1,8 +1,4 @@
-use crate::gfx::{
-	buffer::{BufferUsageFlags, ImmutableBuffer},
-	vulkan::Fence,
-	Gfx,
-};
+use crate::gfx::{volume::StaticVolume, vulkan::Fence, Gfx};
 use ash::{version::DeviceV1_0, vk};
 use memoffset::offset_of;
 use nalgebra::{Vector2, Vector3};
@@ -12,40 +8,25 @@ use std::{
 	ffi::CStr,
 	mem::size_of,
 	slice,
-	sync::Arc,
+	sync::{Arc, Mutex},
 	u32, u64,
 };
 use winit::{EventsLoop, WindowBuilder};
 
 pub struct Window {
-	gfx: Arc<Gfx>,
 	window: winit::Window,
 	surface: vk::SurfaceKHR,
 	surface_format: vk::SurfaceFormatKHR,
-	render_pass: vk::RenderPass,
-	vertices: ImmutableBuffer<[Vertex]>,
-	indices: ImmutableBuffer<[u32]>,
-	swapchain: vk::SwapchainKHR,
-	image_views: Vec<vk::ImageView>,
-	pipeline: vk::Pipeline,
-	framebuffers: Vec<vk::Framebuffer>,
-	command_buffers: Vec<vk::CommandBuffer>,
+	pub(super) render_pass: vk::RenderPass,
+	// TODO: combine vecs for better cpu cache efficiency
 	image_available: Vec<vk::Semaphore>,
 	render_finished: Vec<vk::Semaphore>,
 	frame_finished: Vec<Fence>,
-	frame: usize,
+	cmds: Vec<vk::CommandBuffer>,
+	pub(super) inner: Mutex<WindowInner>,
 }
 impl Window {
-	pub async fn new(gfx: &Arc<Gfx>, events_loop: &EventsLoop) -> Self {
-		let vertices = [
-			Vertex { pos: [-0.5, -0.5].into(), color: [1.0, 0.0, 0.0].into() },
-			Vertex { pos: [0.5, -0.5].into(), color: [0.0, 1.0, 0.0].into() },
-			Vertex { pos: [0.5, 0.5].into(), color: [0.0, 0.0, 1.0].into() },
-			Vertex { pos: [-0.5, 0.5].into(), color: [1.0, 1.0, 1.0].into() },
-		];
-		let vertices = ImmutableBuffer::from_slice(&gfx, &vertices, BufferUsageFlags::VERTEX_BUFFER);
-		let indices = ImmutableBuffer::from_slice(&gfx, &[0u32, 1, 2, 2, 3, 0], BufferUsageFlags::INDEX_BUFFER);
-
+	pub async fn new(gfx: Arc<Gfx>, events_loop: &EventsLoop) -> Arc<Self> {
 		let window = WindowBuilder::new().with_dimensions((1440, 810).into()).build(&events_loop).unwrap();
 
 		let surface = match window.raw_window_handle() {
@@ -114,145 +95,170 @@ impl Window {
 		let pipeline = create_pipeline(&gfx, image_extent, render_pass);
 		let framebuffers = create_framebuffers(&gfx, &image_views, render_pass, image_extent);
 
-		let vertices = vertices.await;
-		let indices = indices.await;
-
-		let command_buffers =
-			create_cmds(&gfx, &framebuffers, render_pass, image_extent, pipeline, &vertices, &indices);
-
-		let image_available = framebuffers
-			.iter()
+		let image_available = (0..2)
 			.map(|_| unsafe { gfx.device.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None) }.unwrap())
 			.collect();
-		let render_finished = framebuffers
-			.iter()
+		let render_finished = (0..2)
 			.map(|_| unsafe { gfx.device.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None) }.unwrap())
 			.collect();
-		let frame_finished = framebuffers.iter().map(|_| Fence::new(&gfx, true)).collect();
+		let frame_finished = (0..2).map(|_| Fence::new(gfx.clone(), true)).collect();
 
-		Self {
-			gfx: gfx.clone(),
-			window,
-			surface,
+		let ci = vk::CommandBufferAllocateInfo::builder()
+			.command_pool(gfx.cmdpool_transient_reset)
+			.level(vk::CommandBufferLevel::PRIMARY)
+			.command_buffer_count(2);
+		let cmds = unsafe { gfx.device.allocate_command_buffers(&ci) }.unwrap();
+
+		let inner = Mutex::new(WindowInner {
+			gfx,
+			image_extent,
 			swapchain,
 			image_views,
-			surface_format,
-			render_pass,
 			pipeline,
 			framebuffers,
-			vertices,
-			indices,
-			command_buffers,
+			frame: 0,
+			volumes: [vec![], vec![]],
+		});
+
+		Arc::new(Self {
+			window,
+			surface,
+			surface_format,
+			render_pass,
 			image_available,
 			render_finished,
 			frame_finished,
-			frame: 0,
-		}
+			cmds,
+			inner,
+		})
 	}
 
-	pub fn draw(&mut self) -> bool {
-		let frame = self.frame;
+	pub fn draw(&self, mut volumes: Vec<Arc<StaticVolume>>) -> bool {
+		unsafe {
+			let mut inner = self.inner.lock().unwrap();
+			let frame = inner.frame;
 
-		let res = unsafe {
-			self.gfx.khr_swapchain.acquire_next_image(
-				self.swapchain,
+			let res = inner.gfx.khr_swapchain.acquire_next_image(
+				inner.swapchain,
 				u64::MAX,
 				self.image_available[frame],
 				vk::Fence::null(),
-			)
-		};
-		let (i, mut suboptimal) = match res {
-			Ok(x) => x,
-			Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return true,
-			Err(err) => panic!(err),
-		};
+			);
+			let (image_idx, mut suboptimal) = match res {
+				Ok(x) => x,
+				Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return true,
+				Err(err) => panic!(err),
+			};
+			let image_uidx = image_idx as _;
 
-		self.frame_finished[frame].wait(u64::MAX);
-		self.frame_finished[frame].reset();
+			self.frame_finished[frame].wait(u64::MAX);
+			self.frame_finished[frame].reset();
+			inner.frame = (frame + 1) % 2;
 
-		let submits = [vk::SubmitInfo::builder()
-			.wait_semaphores(&[self.image_available[frame]])
-			.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-			.command_buffers(&self.command_buffers[(i as usize)..(i as usize) + 1])
-			.signal_semaphores(&[self.render_finished[frame]])
-			.build()];
-		unsafe { self.gfx.device.queue_submit(self.gfx.queue, &submits, self.frame_finished[frame].vk) }.unwrap();
+			let cmd = self.cmds[frame];
+			inner.gfx.device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()).unwrap();
+			inner.gfx.device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::builder()).unwrap();
+			let ci = vk::RenderPassBeginInfo::builder()
+				.render_pass(self.render_pass)
+				.framebuffer(inner.framebuffers[image_uidx])
+				.render_area(vk::Rect2D::builder().extent(inner.image_extent).build())
+				.clear_values(&[vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } }]);
+			inner.gfx.device.cmd_begin_render_pass(cmd, &ci, vk::SubpassContents::SECONDARY_COMMAND_BUFFERS);
+			let sec_cmds = volumes.iter_mut().map(|v| v.get_cmds(&inner, image_uidx)).collect::<Vec<_>>();
+			inner.gfx.device.cmd_execute_commands(cmd, &sec_cmds);
+			inner.gfx.device.cmd_end_render_pass(cmd);
+			inner.gfx.device.end_command_buffer(cmd).unwrap();
+			let cmds = [cmd];
+			let submits = [vk::SubmitInfo::builder()
+				.wait_semaphores(&[self.image_available[frame]])
+				.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+				.command_buffers(&cmds)
+				.signal_semaphores(&[self.render_finished[frame]])
+				.build()];
+			inner.gfx.device.queue_submit(inner.gfx.queue, &submits, self.frame_finished[frame].vk).unwrap();
 
-		self.frame = (frame + 1) % 2;
+			inner.volumes[frame] = volumes;
 
-		let ci = vk::PresentInfoKHR::builder()
-			.wait_semaphores(slice::from_ref(&self.render_finished[frame]))
-			.swapchains(slice::from_ref(&self.swapchain))
-			.image_indices(slice::from_ref(&i));
-		suboptimal = match unsafe { self.gfx.khr_swapchain.queue_present(self.gfx.queue, &ci) } {
-			Ok(x) => x,
-			Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return true,
-			Err(err) => panic!(err),
-		} || suboptimal;
+			let ci = vk::PresentInfoKHR::builder()
+				.wait_semaphores(slice::from_ref(&self.render_finished[frame]))
+				.swapchains(slice::from_ref(&inner.swapchain))
+				.image_indices(slice::from_ref(&image_idx));
+			suboptimal = match inner.gfx.khr_swapchain.queue_present(inner.gfx.queue, &ci) {
+				Ok(x) => x,
+				Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return true,
+				Err(err) => panic!(err),
+			} || suboptimal;
 
-		suboptimal
+			suboptimal
+		}
 	}
 
-	pub fn recreate_swapchain(&mut self) {
-		self.frame_finished[self.last_frame()].wait(u64::MAX);
+	pub fn recreate_swapchain(&self) {
+		let mut inner = self.inner.lock().unwrap();
 
-		unsafe { self.gfx.device.free_command_buffers(self.gfx.cmdpool, &self.command_buffers) };
-		for &framebuffer in &self.framebuffers {
-			unsafe { self.gfx.device.destroy_framebuffer(framebuffer, None) };
+		self.frame_finished[inner.last_frame()].wait(u64::MAX);
+
+		for &framebuffer in &inner.framebuffers {
+			unsafe { inner.gfx.device.destroy_framebuffer(framebuffer, None) };
 		}
-		unsafe { self.gfx.device.destroy_pipeline(self.pipeline, None) };
-		for &image_view in &self.image_views {
-			unsafe { self.gfx.device.destroy_image_view(image_view, None) };
+		unsafe { inner.gfx.device.destroy_pipeline(inner.pipeline, None) };
+		for &image_view in &inner.image_views {
+			unsafe { inner.gfx.device.destroy_image_view(image_view, None) };
 		}
 
-		let (caps, image_extent) = get_caps(&self.gfx, self.surface, &self.window);
+		let (caps, image_extent) = get_caps(&inner.gfx, self.surface, &self.window);
 		let (swapchain, image_views) =
-			create_swapchain(&self.gfx, self.surface, &caps, &self.surface_format, image_extent, self.swapchain);
-		unsafe { self.gfx.khr_swapchain.destroy_swapchain(self.swapchain, None) };
-		self.swapchain = swapchain;
-		self.image_views = image_views;
+			create_swapchain(&inner.gfx, self.surface, &caps, &self.surface_format, image_extent, inner.swapchain);
+		unsafe { inner.gfx.khr_swapchain.destroy_swapchain(inner.swapchain, None) };
+		inner.swapchain = swapchain;
+		inner.image_views = image_views;
 
-		self.pipeline = create_pipeline(&self.gfx, image_extent, self.render_pass);
-		self.framebuffers = create_framebuffers(&self.gfx, &self.image_views, self.render_pass, image_extent);
-		self.command_buffers = create_cmds(
-			&self.gfx,
-			&self.framebuffers,
-			self.render_pass,
-			image_extent,
-			self.pipeline,
-			&self.vertices,
-			&self.indices,
-		);
-	}
-
-	fn last_frame(&self) -> usize {
-		// this is equivalent to `(self.frame - 1) mod 2` and avoids unsigned integer overflow
-		(self.frame + 1) % 2
+		inner.pipeline = create_pipeline(&inner.gfx, image_extent, self.render_pass);
+		inner.framebuffers = create_framebuffers(&inner.gfx, &inner.image_views, self.render_pass, image_extent);
 	}
 }
 impl Drop for Window {
 	fn drop(&mut self) {
 		unsafe {
-			self.frame_finished[self.last_frame()].wait(u64::MAX);
+			let inner = self.inner.lock().unwrap();
 
+			self.frame_finished[inner.last_frame()].wait(u64::MAX);
+
+			inner.gfx.device.free_command_buffers(inner.gfx.cmdpool_transient_reset, &self.cmds);
 			for &semaphore in &self.render_finished {
-				self.gfx.device.destroy_semaphore(semaphore, None);
+				inner.gfx.device.destroy_semaphore(semaphore, None);
 			}
 			for &semaphore in &self.image_available {
-				self.gfx.device.destroy_semaphore(semaphore, None);
+				inner.gfx.device.destroy_semaphore(semaphore, None);
 			}
-			self.gfx.device.free_command_buffers(self.gfx.cmdpool, &self.command_buffers);
-			for &framebuffer in &self.framebuffers {
-				self.gfx.device.destroy_framebuffer(framebuffer, None);
+			for &framebuffer in &inner.framebuffers {
+				inner.gfx.device.destroy_framebuffer(framebuffer, None);
 			}
-			self.gfx.device.destroy_pipeline(self.pipeline, None);
-			for &image_view in &self.image_views {
-				self.gfx.device.destroy_image_view(image_view, None);
+			inner.gfx.device.destroy_pipeline(inner.pipeline, None);
+			for &image_view in &inner.image_views {
+				inner.gfx.device.destroy_image_view(image_view, None);
 			}
-			self.gfx.khr_swapchain.destroy_swapchain(self.swapchain, None);
-			self.gfx.device.destroy_render_pass(self.render_pass, None);
-			self.gfx.khr_surface.destroy_surface(self.surface, None);
+			inner.gfx.khr_swapchain.destroy_swapchain(inner.swapchain, None);
+			inner.gfx.device.destroy_render_pass(self.render_pass, None);
+			inner.gfx.khr_surface.destroy_surface(self.surface, None);
 		}
+	}
+}
+
+pub(super) struct WindowInner {
+	gfx: Arc<Gfx>,
+	image_extent: vk::Extent2D,
+	swapchain: vk::SwapchainKHR,
+	image_views: Vec<vk::ImageView>,
+	pub(super) pipeline: vk::Pipeline,
+	pub(super) framebuffers: Vec<vk::Framebuffer>,
+	frame: usize,
+	volumes: [Vec<Arc<StaticVolume>>; 2],
+}
+impl WindowInner {
+	fn last_frame(&self) -> usize {
+		// this is equivalent to `(self.frame - 1) mod 2` and avoids unsigned integer overflow
+		(self.frame + 1) % 2
 	}
 }
 
@@ -434,42 +440,4 @@ fn create_framebuffers(
 			unsafe { gfx.device.create_framebuffer(&ci, None) }.unwrap()
 		})
 		.collect()
-}
-
-fn create_cmds(
-	gfx: &Gfx,
-	framebuffers: &[vk::Framebuffer],
-	render_pass: vk::RenderPass,
-	image_extent: vk::Extent2D,
-	pipeline: vk::Pipeline,
-	vertices: &ImmutableBuffer<[Vertex]>,
-	indices: &ImmutableBuffer<[u32]>,
-) -> Vec<vk::CommandBuffer> {
-	let ci = vk::CommandBufferAllocateInfo::builder()
-		.command_pool(gfx.cmdpool)
-		.level(vk::CommandBufferLevel::PRIMARY)
-		.command_buffer_count(framebuffers.len() as _);
-	let command_buffers = unsafe { gfx.device.allocate_command_buffers(&ci) }.unwrap();
-	for (&cmd, &framebuffer) in command_buffers.iter().zip(framebuffers) {
-		unsafe {
-			gfx.device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::builder()).unwrap();
-
-			let ci = vk::RenderPassBeginInfo::builder()
-				.render_pass(render_pass)
-				.framebuffer(framebuffer)
-				.render_area(vk::Rect2D::builder().extent(image_extent).build())
-				.clear_values(&[vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } }]);
-			gfx.device.cmd_begin_render_pass(cmd, &ci, vk::SubpassContents::INLINE);
-			gfx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
-
-			gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[vertices.buf], &[0]);
-			gfx.device.cmd_bind_index_buffer(cmd, indices.buf, 0, vk::IndexType::UINT32);
-
-			gfx.device.cmd_draw_indexed(cmd, indices.len as _, 1, 0, 0, 0);
-			gfx.device.cmd_end_render_pass(cmd);
-
-			gfx.device.end_command_buffer(cmd).unwrap();
-		}
-	}
-	command_buffers
 }
