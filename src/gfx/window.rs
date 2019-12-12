@@ -39,12 +39,13 @@ pub struct Window {
 impl Window {
 	pub async fn new(gfx: &Arc<Gfx>, events_loop: &EventsLoop) -> Self {
 		let vertices = [
-			Vertex { pos: [0.0, -0.5].into(), color: [1.0, 0.0, 0.0].into() },
-			Vertex { pos: [0.5, 0.5].into(), color: [0.0, 1.0, 0.0].into() },
-			Vertex { pos: [-0.5, 0.5].into(), color: [0.0, 0.0, 1.0].into() },
+			Vertex { pos: [-0.5, -0.5].into(), color: [1.0, 0.0, 0.0].into() },
+			Vertex { pos: [0.5, -0.5].into(), color: [0.0, 1.0, 0.0].into() },
+			Vertex { pos: [0.5, 0.5].into(), color: [0.0, 0.0, 1.0].into() },
+			Vertex { pos: [-0.5, 0.5].into(), color: [1.0, 1.0, 1.0].into() },
 		];
 		let vertices = ImmutableBuffer::from_slice(&gfx, &vertices, BufferUsageFlags::VERTEX_BUFFER);
-		let indices = ImmutableBuffer::from_slice(&gfx, &[0u32, 1, 2], BufferUsageFlags::INDEX_BUFFER);
+		let indices = ImmutableBuffer::from_slice(&gfx, &[0u32, 1, 2, 2, 3, 0], BufferUsageFlags::INDEX_BUFFER);
 
 		let window = WindowBuilder::new().with_dimensions((1440, 810).into()).build(&events_loop).unwrap();
 
@@ -491,7 +492,7 @@ fn create_cmds(
 			gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[vertices.buf], &[0]);
 			gfx.device.cmd_bind_index_buffer(cmd, indices.buf, 0, vk::IndexType::UINT32);
 
-			gfx.device.cmd_draw_indexed(cmd, 3, 1, 0, 0, 0);
+			gfx.device.cmd_draw_indexed(cmd, 6, 1, 0, 0, 0);
 			gfx.device.cmd_end_render_pass(cmd);
 
 			gfx.device.end_command_buffer(cmd).unwrap();
