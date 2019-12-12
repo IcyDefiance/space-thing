@@ -22,9 +22,7 @@ pub struct Window {
 	window: winit::Window,
 	surface: vk::SurfaceKHR,
 	surface_format: vk::SurfaceFormatKHR,
-	layout: vk::PipelineLayout,
 	render_pass: vk::RenderPass,
-	command_pool: vk::CommandPool,
 	vertices: ImmutableBuffer<[Vertex]>,
 	indices: ImmutableBuffer<[u32]>,
 	swapchain: vk::SwapchainKHR,
@@ -82,9 +80,6 @@ impl Window {
 				})
 				.unwrap();
 
-		let ci = vk::PipelineLayoutCreateInfo::builder();
-		let layout = unsafe { gfx.device.create_pipeline_layout(&ci, None) }.unwrap();
-
 		let attachments = [vk::AttachmentDescription::builder()
 			.format(surface_format.format)
 			.samples(vk::SampleCountFlags::TYPE_1)
@@ -113,20 +108,17 @@ impl Window {
 			.dependencies(&dependencies);
 		let render_pass = unsafe { gfx.device.create_render_pass(&ci, None) }.unwrap();
 
-		let ci = vk::CommandPoolCreateInfo::builder().queue_family_index(gfx.queue_family);
-		let command_pool = unsafe { gfx.device.create_command_pool(&ci, None) }.unwrap();
-
 		let (caps, image_extent) = get_caps(&gfx, surface, &window);
 		let (swapchain, image_views) =
 			create_swapchain(&gfx, surface, &caps, &surface_format, image_extent, vk::SwapchainKHR::null());
-		let pipeline = create_pipeline(&gfx, image_extent, layout, render_pass);
+		let pipeline = create_pipeline(&gfx, image_extent, render_pass);
 		let framebuffers = create_framebuffers(&gfx, &image_views, render_pass, image_extent);
 
 		let vertices = vertices.await;
 		let indices = indices.await;
 
 		let command_buffers =
-			create_cmds(&gfx, command_pool, &framebuffers, render_pass, image_extent, pipeline, &vertices, &indices);
+			create_cmds(&gfx, &framebuffers, render_pass, image_extent, pipeline, &vertices, &indices);
 
 		let image_available = framebuffers
 			.iter()
@@ -145,11 +137,9 @@ impl Window {
 			swapchain,
 			image_views,
 			surface_format,
-			layout,
 			render_pass,
 			pipeline,
 			framebuffers,
-			command_pool,
 			vertices,
 			indices,
 			command_buffers,
@@ -206,7 +196,7 @@ impl Window {
 	pub fn recreate_swapchain(&mut self) {
 		self.frame_finished[self.last_frame()].wait(u64::MAX);
 
-		unsafe { self.gfx.device.free_command_buffers(self.command_pool, &self.command_buffers) };
+		unsafe { self.gfx.device.free_command_buffers(self.gfx.cmdpool, &self.command_buffers) };
 		for &framebuffer in &self.framebuffers {
 			unsafe { self.gfx.device.destroy_framebuffer(framebuffer, None) };
 		}
@@ -222,11 +212,10 @@ impl Window {
 		self.swapchain = swapchain;
 		self.image_views = image_views;
 
-		self.pipeline = create_pipeline(&self.gfx, image_extent, self.layout, self.render_pass);
+		self.pipeline = create_pipeline(&self.gfx, image_extent, self.render_pass);
 		self.framebuffers = create_framebuffers(&self.gfx, &self.image_views, self.render_pass, image_extent);
 		self.command_buffers = create_cmds(
 			&self.gfx,
-			self.command_pool,
 			&self.framebuffers,
 			self.render_pass,
 			image_extent,
@@ -252,7 +241,7 @@ impl Drop for Window {
 			for &semaphore in &self.image_available {
 				self.gfx.device.destroy_semaphore(semaphore, None);
 			}
-			self.gfx.device.free_command_buffers(self.command_pool, &self.command_buffers);
+			self.gfx.device.free_command_buffers(self.gfx.cmdpool, &self.command_buffers);
 			for &framebuffer in &self.framebuffers {
 				self.gfx.device.destroy_framebuffer(framebuffer, None);
 			}
@@ -261,9 +250,7 @@ impl Drop for Window {
 				self.gfx.device.destroy_image_view(image_view, None);
 			}
 			self.gfx.khr_swapchain.destroy_swapchain(self.swapchain, None);
-			self.gfx.device.destroy_command_pool(self.command_pool, None);
 			self.gfx.device.destroy_render_pass(self.render_pass, None);
-			self.gfx.device.destroy_pipeline_layout(self.layout, None);
 			self.gfx.khr_surface.destroy_surface(self.surface, None);
 		}
 	}
@@ -378,12 +365,7 @@ fn create_swapchain(
 	(swapchain, image_views)
 }
 
-fn create_pipeline(
-	gfx: &Gfx,
-	image_extent: vk::Extent2D,
-	layout: vk::PipelineLayout,
-	render_pass: vk::RenderPass,
-) -> vk::Pipeline {
+fn create_pipeline(gfx: &Gfx, image_extent: vk::Extent2D, render_pass: vk::RenderPass) -> vk::Pipeline {
 	let stages = [
 		vk::PipelineShaderStageCreateInfo::builder()
 			.stage(vk::ShaderStageFlags::VERTEX)
@@ -428,7 +410,7 @@ fn create_pipeline(
 		.rasterization_state(&rasterization_state)
 		.multisample_state(&multisample_state)
 		.color_blend_state(&color_blend_state)
-		.layout(layout)
+		.layout(gfx.layout)
 		.render_pass(render_pass)
 		.build()];
 	unsafe { gfx.device.create_graphics_pipelines(vk::PipelineCache::null(), &cis, None) }.unwrap()[0]
@@ -456,7 +438,6 @@ fn create_framebuffers(
 
 fn create_cmds(
 	gfx: &Gfx,
-	command_pool: vk::CommandPool,
 	framebuffers: &[vk::Framebuffer],
 	render_pass: vk::RenderPass,
 	image_extent: vk::Extent2D,
@@ -465,7 +446,7 @@ fn create_cmds(
 	indices: &ImmutableBuffer<[u32]>,
 ) -> Vec<vk::CommandBuffer> {
 	let ci = vk::CommandBufferAllocateInfo::builder()
-		.command_pool(command_pool)
+		.command_pool(gfx.cmdpool)
 		.level(vk::CommandBufferLevel::PRIMARY)
 		.command_buffer_count(framebuffers.len() as _);
 	let command_buffers = unsafe { gfx.device.allocate_command_buffers(&ci) }.unwrap();

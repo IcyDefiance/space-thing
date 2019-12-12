@@ -1,4 +1,5 @@
 pub mod buffer;
+pub mod volume;
 pub mod window;
 
 mod vulkan;
@@ -35,7 +36,9 @@ pub struct Gfx {
 	device: Device,
 	khr_swapchain: khr::Swapchain,
 	queue: vk::Queue,
+	cmdpool: vk::CommandPool,
 	cmdpool_transient: vk::CommandPool,
+	layout: vk::PipelineLayout,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
 }
@@ -111,10 +114,14 @@ impl Gfx {
 
 		let queue = unsafe { device.get_device_queue(queue_family, 0) };
 
-		let ci = vk::CommandPoolCreateInfo::builder()
-			.flags(vk::CommandPoolCreateFlags::TRANSIENT)
-			.queue_family_index(queue_family);
+		let ci = vk::CommandPoolCreateInfo::builder().queue_family_index(queue_family);
+		let cmdpool = unsafe { device.create_command_pool(&ci, None) }.unwrap();
+
+		let ci = ci.flags(vk::CommandPoolCreateFlags::TRANSIENT);
 		let cmdpool_transient = unsafe { device.create_command_pool(&ci, None) }.unwrap();
+
+		let ci = vk::PipelineLayoutCreateInfo::builder();
+		let layout = unsafe { device.create_pipeline_layout(&ci, None) }.unwrap();
 
 		let vshader = create_shader(&device, &vert_spv.await.unwrap());
 		let fshader = create_shader(&device, &frag_spv.await.unwrap());
@@ -137,7 +144,9 @@ impl Gfx {
 			device,
 			khr_swapchain,
 			queue,
+			cmdpool,
 			cmdpool_transient,
+			layout,
 			vshader,
 			fshader,
 		})
@@ -148,7 +157,9 @@ impl Drop for Gfx {
 		unsafe {
 			self.device.destroy_shader_module(self.fshader, None);
 			self.device.destroy_shader_module(self.vshader, None);
+			self.device.destroy_pipeline_layout(self.layout, None);
 			self.device.destroy_command_pool(self.cmdpool_transient, None);
+			self.device.destroy_command_pool(self.cmdpool, None);
 			self.device.destroy_device(None);
 			self.debug_utils.destroy_debug_utils_messenger(self.debug_messenger, None);
 			self.instance.destroy_instance(None);
