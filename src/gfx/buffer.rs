@@ -1,13 +1,6 @@
-use crate::threads::WAKER_THREAD;
+use crate::gfx::vulkan::Fence;
 pub use ash::vk::BufferUsageFlags;
-use futures::task::SpawnExt;
-use std::{
-	future::Future,
-	marker::PhantomData,
-	pin::Pin,
-	task::{Context, Poll},
-	u64,
-};
+use std::{marker::PhantomData, u64};
 
 use crate::gfx::Gfx;
 use ash::{version::DeviceV1_0, vk};
@@ -76,39 +69,6 @@ impl<T: ?Sized> Drop for ImmutableBuffer<T> {
 			self.gfx.device.destroy_buffer(self.buf, None);
 			self.gfx.device.free_memory(self.mem, None);
 		}
-	}
-}
-
-pub struct Fence {
-	gfx: Arc<Gfx>,
-	vk: vk::Fence,
-}
-impl Fence {
-	pub fn new(gfx: &Arc<Gfx>, signalled: bool) -> Self {
-		// TODO: maybe use fence pool
-		let flags = if signalled { vk::FenceCreateFlags::SIGNALED } else { vk::FenceCreateFlags::empty() };
-		let vk = unsafe { gfx.device.create_fence(&vk::FenceCreateInfo::builder().flags(flags), None) }.unwrap();
-		Self { gfx: gfx.clone(), vk }
-	}
-}
-impl Future for Fence {
-	type Output = Result<(), vk::Result>;
-
-	fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-		match unsafe { self.gfx.device.get_fence_status(self.vk) } {
-			Ok(()) => Poll::Ready(Ok(())),
-			Err(vk::Result::NOT_READY) => {
-				let waker = cx.waker().clone();
-				WAKER_THREAD.lock().unwrap().spawn(async move { waker.wake() }).unwrap();
-				Poll::Pending
-			},
-			Err(err) => Poll::Ready(Err(err)),
-		}
-	}
-}
-impl Drop for Fence {
-	fn drop(&mut self) {
-		unsafe { self.gfx.device.destroy_fence(self.vk, None) };
 	}
 }
 

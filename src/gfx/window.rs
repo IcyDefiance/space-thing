@@ -1,5 +1,6 @@
 use crate::gfx::{
 	buffer::{BufferUsageFlags, ImmutableBuffer},
+	vulkan::Fence,
 	Gfx,
 };
 use ash::{version::DeviceV1_0, vk};
@@ -33,7 +34,7 @@ pub struct Window {
 	command_buffers: Vec<vk::CommandBuffer>,
 	image_available: Vec<vk::Semaphore>,
 	render_finished: Vec<vk::Semaphore>,
-	frame_finished: Vec<vk::Fence>,
+	frame_finished: Vec<Fence>,
 	frame: usize,
 }
 impl Window {
@@ -135,15 +136,7 @@ impl Window {
 			.iter()
 			.map(|_| unsafe { gfx.device.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None) }.unwrap())
 			.collect();
-		let frame_finished = framebuffers
-			.iter()
-			.map(|_| {
-				unsafe {
-					gfx.device.create_fence(&vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED), None)
-				}
-				.unwrap()
-			})
-			.collect();
+		let frame_finished = framebuffers.iter().map(|_| Fence::new(&gfx, true)).collect();
 
 		Self {
 			gfx: gfx.clone(),
@@ -184,8 +177,8 @@ impl Window {
 			Err(err) => panic!(err),
 		};
 
-		unsafe { self.gfx.device.wait_for_fences(&self.frame_finished[frame..frame + 1], false, u64::MAX) }.unwrap();
-		unsafe { self.gfx.device.reset_fences(&self.frame_finished[frame..frame + 1]) }.unwrap();
+		self.frame_finished[frame].wait(u64::MAX);
+		self.frame_finished[frame].reset();
 
 		let submits = [vk::SubmitInfo::builder()
 			.wait_semaphores(&[self.image_available[frame]])
@@ -193,7 +186,7 @@ impl Window {
 			.command_buffers(&self.command_buffers[(i as usize)..(i as usize) + 1])
 			.signal_semaphores(&[self.render_finished[frame]])
 			.build()];
-		unsafe { self.gfx.device.queue_submit(self.gfx.queue, &submits, self.frame_finished[frame]) }.unwrap();
+		unsafe { self.gfx.device.queue_submit(self.gfx.queue, &submits, self.frame_finished[frame].vk) }.unwrap();
 
 		self.frame = (frame + 1) % 2;
 
@@ -211,8 +204,7 @@ impl Window {
 	}
 
 	pub fn recreate_swapchain(&mut self) {
-		let frame = (self.frame + 1) % 2;
-		unsafe { self.gfx.device.wait_for_fences(&self.frame_finished[frame..frame + 1], false, u64::MAX) }.unwrap();
+		self.frame_finished[self.last_frame()].wait(u64::MAX);
 
 		unsafe { self.gfx.device.free_command_buffers(self.command_pool, &self.command_buffers) };
 		for &framebuffer in &self.framebuffers {
@@ -243,17 +235,17 @@ impl Window {
 			&self.indices,
 		);
 	}
+
+	fn last_frame(&self) -> usize {
+		// this is equivalent to `(self.frame - 1) mod 2` and avoids unsigned integer overflow
+		(self.frame + 1) % 2
+	}
 }
 impl Drop for Window {
 	fn drop(&mut self) {
 		unsafe {
-			// this is equivalent to `(self.frame - 1) mod 2` and avoids unsigned integer overflow
-			let frame = (self.frame + 1) % 2;
-			self.gfx.device.wait_for_fences(&self.frame_finished[frame..frame + 1], false, u64::MAX).unwrap();
+			self.frame_finished[self.last_frame()].wait(u64::MAX);
 
-			for &fence in &self.frame_finished {
-				self.gfx.device.destroy_fence(fence, None);
-			}
 			for &semaphore in &self.render_finished {
 				self.gfx.device.destroy_semaphore(semaphore, None);
 			}

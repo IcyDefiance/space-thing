@@ -1,6 +1,8 @@
 pub mod buffer;
 pub mod window;
 
+mod vulkan;
+
 use crate::fs::read_bytes;
 use ash::{
 	extensions::{ext, khr},
