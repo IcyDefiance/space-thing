@@ -17,12 +17,14 @@ pub struct ImmutableBuffer<T: ?Sized> {
 	gfx: Arc<Gfx>,
 	pub(super) buf: vk::Buffer,
 	mem: vk::DeviceMemory,
+	pub(super) len: usize,
 	_phantom: PhantomData<Box<T>>,
 }
 impl<T: Clone> ImmutableBuffer<[T]> {
 	pub async fn from_slice(gfx: &Arc<Gfx>, data: &[T], usage: BufferUsageFlags) -> Self {
 		unsafe {
-			let size = size_of::<T>() as u64 * data.len() as u64;
+			let len = data.len();
+			let size = size_of::<T>() as u64 * len as u64;
 
 			let (cpubuf, cpumem) = create_buffer(
 				&gfx,
@@ -64,7 +66,7 @@ impl<T: Clone> ImmutableBuffer<[T]> {
 			gfx.device.destroy_buffer(cpubuf, None);
 			gfx.device.free_memory(cpumem, None);
 
-			Self { gfx: gfx.clone(), buf, mem, _phantom: PhantomData }
+			Self { gfx: gfx.clone(), buf, mem, len, _phantom: PhantomData }
 		}
 	}
 }

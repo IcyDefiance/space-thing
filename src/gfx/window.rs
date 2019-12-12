@@ -492,7 +492,7 @@ fn create_cmds(
 			gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[vertices.buf], &[0]);
 			gfx.device.cmd_bind_index_buffer(cmd, indices.buf, 0, vk::IndexType::UINT32);
 
-			gfx.device.cmd_draw_indexed(cmd, 6, 1, 0, 0, 0);
+			gfx.device.cmd_draw_indexed(cmd, indices.len as _, 1, 0, 0, 0);
 			gfx.device.cmd_end_render_pass(cmd);
 
 			gfx.device.end_command_buffer(cmd).unwrap();
