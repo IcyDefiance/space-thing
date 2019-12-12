@@ -25,6 +25,7 @@ pub struct Window {
 	render_pass: vk::RenderPass,
 	command_pool: vk::CommandPool,
 	vertices: ImmutableBuffer<[Vertex]>,
+	indices: ImmutableBuffer<[u32]>,
 	swapchain: vk::SwapchainKHR,
 	image_views: Vec<vk::ImageView>,
 	pipeline: vk::Pipeline,
@@ -43,6 +44,7 @@ impl Window {
 			Vertex { pos: [-0.5, 0.5].into(), color: [0.0, 0.0, 1.0].into() },
 		];
 		let vertices = ImmutableBuffer::from_slice(&gfx, &vertices, BufferUsageFlags::VERTEX_BUFFER);
+		let indices = ImmutableBuffer::from_slice(&gfx, &[0u32, 1, 2], BufferUsageFlags::INDEX_BUFFER);
 
 		let window = WindowBuilder::new().with_dimensions((1440, 810).into()).build(&events_loop).unwrap();
 
@@ -119,9 +121,10 @@ impl Window {
 		let framebuffers = create_framebuffers(&gfx, &image_views, render_pass, image_extent);
 
 		let vertices = vertices.await;
+		let indices = indices.await;
 
 		let command_buffers =
-			create_cmds(&gfx, command_pool, &framebuffers, render_pass, image_extent, pipeline, &vertices);
+			create_cmds(&gfx, command_pool, &framebuffers, render_pass, image_extent, pipeline, &vertices, &indices);
 
 		let image_available = framebuffers
 			.iter()
@@ -154,6 +157,7 @@ impl Window {
 			framebuffers,
 			command_pool,
 			vertices,
+			indices,
 			command_buffers,
 			image_available,
 			render_finished,
@@ -235,6 +239,7 @@ impl Window {
 			image_extent,
 			self.pipeline,
 			&self.vertices,
+			&self.indices,
 		);
 	}
 }
@@ -463,7 +468,8 @@ fn create_cmds(
 	render_pass: vk::RenderPass,
 	image_extent: vk::Extent2D,
 	pipeline: vk::Pipeline,
-	vertsbuf: &ImmutableBuffer<[Vertex]>,
+	vertices: &ImmutableBuffer<[Vertex]>,
+	indices: &ImmutableBuffer<[u32]>,
 ) -> Vec<vk::CommandBuffer> {
 	let ci = vk::CommandBufferAllocateInfo::builder()
 		.command_pool(command_pool)
@@ -482,9 +488,10 @@ fn create_cmds(
 			gfx.device.cmd_begin_render_pass(cmd, &ci, vk::SubpassContents::INLINE);
 			gfx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-			gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[vertsbuf.buf], &[0]);
+			gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[vertices.buf], &[0]);
+			gfx.device.cmd_bind_index_buffer(cmd, indices.buf, 0, vk::IndexType::UINT32);
 
-			gfx.device.cmd_draw(cmd, 3, 1, 0, 0);
+			gfx.device.cmd_draw_indexed(cmd, 3, 1, 0, 0, 0);
 			gfx.device.cmd_end_render_pass(cmd);
 
 			gfx.device.end_command_buffer(cmd).unwrap();
