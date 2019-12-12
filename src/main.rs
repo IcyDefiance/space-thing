@@ -3,11 +3,7 @@ mod gfx;
 mod threads;
 
 use futures::executor::block_on;
-use gfx::{
-	buffer::{BufferUsageFlags, ImmutableBuffer},
-	window::{Vertex, Window},
-	Gfx,
-};
+use gfx::{window::Window, Gfx};
 use simplelog::{LevelFilter, SimpleLogger};
 use winit::{Event, EventsLoop, WindowEvent};
 
@@ -21,7 +17,7 @@ async fn amain() {
 	let gfx = Gfx::new().await;
 
 	let mut events_loop = EventsLoop::new();
-	let mut window = Window::new(&gfx, &events_loop);
+	let mut window = Window::new(&gfx, &events_loop).await;
 
 	loop {
 		let mut exit = false;

@@ -36,7 +36,14 @@ pub struct Window {
 	frame: usize,
 }
 impl Window {
-	pub fn new(gfx: &Arc<Gfx>, events_loop: &EventsLoop) -> Self {
+	pub async fn new(gfx: &Arc<Gfx>, events_loop: &EventsLoop) -> Self {
+		let vertices = [
+			Vertex { pos: [0.0, -0.5].into(), color: [1.0, 0.0, 0.0].into() },
+			Vertex { pos: [0.5, 0.5].into(), color: [0.0, 1.0, 0.0].into() },
+			Vertex { pos: [-0.5, 0.5].into(), color: [0.0, 0.0, 1.0].into() },
+		];
+		let vertices = ImmutableBuffer::from_slice(&gfx, &vertices, BufferUsageFlags::VERTEX_BUFFER);
+
 		let window = WindowBuilder::new().with_dimensions((1440, 810).into()).build(&events_loop).unwrap();
 
 		let surface = match window.raw_window_handle() {
@@ -105,18 +112,14 @@ impl Window {
 		let ci = vk::CommandPoolCreateInfo::builder().queue_family_index(gfx.queue_family);
 		let command_pool = unsafe { gfx.device.create_command_pool(&ci, None) }.unwrap();
 
-		let vertices = [
-			Vertex { pos: [0.0, -0.5].into(), color: [1.0, 0.0, 0.0].into() },
-			Vertex { pos: [0.5, 0.5].into(), color: [0.0, 1.0, 0.0].into() },
-			Vertex { pos: [-0.5, 0.5].into(), color: [0.0, 0.0, 1.0].into() },
-		];
-		let vertices = ImmutableBuffer::from_slice(&gfx, &vertices, BufferUsageFlags::VERTEX_BUFFER);
-
 		let (caps, image_extent) = get_caps(&gfx, surface, &window);
 		let (swapchain, image_views) =
 			create_swapchain(&gfx, surface, &caps, &surface_format, image_extent, vk::SwapchainKHR::null());
 		let pipeline = create_pipeline(&gfx, image_extent, layout, render_pass);
 		let framebuffers = create_framebuffers(&gfx, &image_views, render_pass, image_extent);
+
+		let vertices = vertices.await;
+
 		let command_buffers =
 			create_cmds(&gfx, command_pool, &framebuffers, render_pass, image_extent, pipeline, &vertices);
 

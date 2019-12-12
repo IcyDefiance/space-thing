@@ -16,7 +16,7 @@ use std::{
 };
 
 pub struct Gfx {
-	entry: Entry,
+	_entry: Entry,
 	instance: Instance,
 	debug_utils: ext::DebugUtils,
 	khr_surface: khr::Surface,
@@ -33,6 +33,7 @@ pub struct Gfx {
 	device: Device,
 	khr_swapchain: khr::Swapchain,
 	queue: vk::Queue,
+	cmdpool_transient: vk::CommandPool,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
 }
@@ -108,11 +109,16 @@ impl Gfx {
 
 		let queue = unsafe { device.get_device_queue(queue_family, 0) };
 
+		let ci = vk::CommandPoolCreateInfo::builder()
+			.flags(vk::CommandPoolCreateFlags::TRANSIENT)
+			.queue_family_index(queue_family);
+		let cmdpool_transient = unsafe { device.create_command_pool(&ci, None) }.unwrap();
+
 		let vshader = create_shader(&device, &vert_spv.await.unwrap());
 		let fshader = create_shader(&device, &frag_spv.await.unwrap());
 
 		Arc::new(Self {
-			entry,
+			_entry: entry,
 			instance,
 			debug_utils,
 			khr_surface,
@@ -129,6 +135,7 @@ impl Gfx {
 			device,
 			khr_swapchain,
 			queue,
+			cmdpool_transient,
 			vshader,
 			fshader,
 		})
@@ -139,6 +146,7 @@ impl Drop for Gfx {
 		unsafe {
 			self.device.destroy_shader_module(self.fshader, None);
 			self.device.destroy_shader_module(self.vshader, None);
+			self.device.destroy_command_pool(self.cmdpool_transient, None);
 			self.device.destroy_device(None);
 			self.debug_utils.destroy_debug_utils_messenger(self.debug_messenger, None);
 			self.instance.destroy_instance(None);
