@@ -4,11 +4,7 @@ mod threads;
 
 use crate::gfx::window::Vertex;
 use futures::executor::block_on;
-use gfx::{
-	volume::{StaticVolume, VolumeData},
-	window::Window,
-	Gfx,
-};
+use gfx::{volume::Volume, window::Window, Gfx};
 use simplelog::{LevelFilter, SimpleLogger};
 use winit::{Event, EventsLoop, WindowEvent};
 
@@ -22,9 +18,9 @@ async fn amain() {
 	let gfx = Gfx::new().await;
 
 	let mut events_loop = EventsLoop::new();
-	let window = Window::new(gfx.clone(), &events_loop).await;
+	let mut window = Window::new(gfx.clone(), &events_loop);
 
-	let data1 = VolumeData::new(
+	let data1 = Volume::new(
 		gfx.clone(),
 		&[
 			Vertex { pos: [-0.25, -0.25].into(), color: [1.0, 0.0, 0.0].into() },
@@ -35,7 +31,7 @@ async fn amain() {
 		&[0u32, 1, 2, 2, 3, 0],
 	)
 	.await;
-	let data2 = VolumeData::new(
+	let data2 = Volume::new(
 		gfx.clone(),
 		&[
 			Vertex { pos: [-0.75, -0.75].into(), color: [1.0, 0.0, 0.0].into() },
@@ -46,7 +42,7 @@ async fn amain() {
 		&[0u32, 1, 2, 2, 3, 0],
 	)
 	.await;
-	let volumes = vec![StaticVolume::new(window.clone(), data1), StaticVolume::new(window.clone(), data2)];
+	let volumes = vec![data1, data2];
 
 	loop {
 		let mut exit = false;
@@ -58,8 +54,6 @@ async fn amain() {
 			break;
 		}
 
-		if window.draw(volumes.clone()) {
-			window.recreate_swapchain();
-		}
+		window.draw(volumes.clone());
 	}
 }

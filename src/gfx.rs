@@ -2,8 +2,6 @@ pub mod buffer;
 pub mod volume;
 pub mod window;
 
-mod vulkan;
-
 use crate::fs::read_bytes;
 use ash::{
 	extensions::{ext, khr},
@@ -38,7 +36,6 @@ pub struct Gfx {
 	queue: vk::Queue,
 	cmdpool: vk::CommandPool,
 	cmdpool_transient: vk::CommandPool,
-	cmdpool_transient_reset: vk::CommandPool,
 	layout: vk::PipelineLayout,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
@@ -121,9 +118,6 @@ impl Gfx {
 		let ci = ci.flags(vk::CommandPoolCreateFlags::TRANSIENT);
 		let cmdpool_transient = unsafe { device.create_command_pool(&ci, None) }.unwrap();
 
-		let ci = ci.flags(vk::CommandPoolCreateFlags::TRANSIENT | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-		let cmdpool_transient_reset = unsafe { device.create_command_pool(&ci, None) }.unwrap();
-
 		let ci = vk::PipelineLayoutCreateInfo::builder();
 		let layout = unsafe { device.create_pipeline_layout(&ci, None) }.unwrap();
 
@@ -150,7 +144,6 @@ impl Gfx {
 			queue,
 			cmdpool,
 			cmdpool_transient,
-			cmdpool_transient_reset,
 			layout,
 			vshader,
 			fshader,
@@ -163,7 +156,6 @@ impl Drop for Gfx {
 			self.device.destroy_shader_module(self.fshader, None);
 			self.device.destroy_shader_module(self.vshader, None);
 			self.device.destroy_pipeline_layout(self.layout, None);
-			self.device.destroy_command_pool(self.cmdpool_transient_reset, None);
 			self.device.destroy_command_pool(self.cmdpool_transient, None);
 			self.device.destroy_command_pool(self.cmdpool, None);
 			self.device.destroy_device(None);

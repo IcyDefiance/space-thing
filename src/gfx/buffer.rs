@@ -1,4 +1,3 @@
-use crate::gfx::vulkan::Fence;
 pub use ash::vk::BufferUsageFlags;
 use std::{marker::PhantomData, u64};
 
@@ -38,7 +37,7 @@ impl<T: Clone> ImmutableBuffer<[T]> {
 				vk::MemoryPropertyFlags::DEVICE_LOCAL,
 			);
 
-			let fence = Fence::new(gfx.clone(), false);
+			let fence = gfx.device.create_fence(&vk::FenceCreateInfo::builder(), None).unwrap();
 
 			let ci = vk::CommandBufferAllocateInfo::builder()
 				.command_pool(gfx.cmdpool_transient)
@@ -51,9 +50,9 @@ impl<T: Clone> ImmutableBuffer<[T]> {
 			gfx.device.end_command_buffer(cmd).unwrap();
 
 			let submits = [vk::SubmitInfo::builder().command_buffers(&cmds).build()];
-			gfx.device.queue_submit(gfx.queue, &submits, fence.vk).unwrap();
+			gfx.device.queue_submit(gfx.queue, &submits, fence).unwrap();
 
-			fence.await.unwrap();
+			gfx.device.wait_for_fences(&[fence], false, !0).unwrap();
 
 			gfx.device.free_command_buffers(gfx.cmdpool_transient, &cmds);
 			gfx.device.destroy_buffer(cpubuf, None);
