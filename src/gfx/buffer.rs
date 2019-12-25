@@ -1,41 +1,48 @@
 pub use ash::vk::BufferUsageFlags;
-use std::{marker::PhantomData, u64};
 
 use crate::gfx::Gfx;
 use ash::{version::DeviceV1_0, vk};
-use std::{mem::size_of, slice, sync::Arc};
+use std::{marker::PhantomData, mem::size_of, slice, sync::Arc, u64};
+use vk_mem::{Allocation, AllocationCreateInfo, MemoryUsage};
 
 pub struct ImmutableBuffer<T: ?Sized> {
 	pub(super) gfx: Arc<Gfx>,
 	pub(super) buf: vk::Buffer,
-	mem: vk::DeviceMemory,
+	allocation: Allocation,
 	pub(super) len: usize,
 	_phantom: PhantomData<Box<T>>,
 }
 impl<T: Clone> ImmutableBuffer<[T]> {
-	pub async fn from_slice(gfx: Arc<Gfx>, data: &[T], usage: BufferUsageFlags) -> Self {
+	pub fn from_slice(gfx: Arc<Gfx>, data: &[T], usage: BufferUsageFlags) -> Self {
 		unsafe {
 			let len = data.len();
 			let size = size_of::<T>() as u64 * len as u64;
 
-			let (cpubuf, cpumem) = create_buffer(
-				&gfx,
-				size,
-				BufferUsageFlags::TRANSFER_SRC,
-				vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-			);
+			let create_info = AllocationCreateInfo { usage: MemoryUsage::CpuOnly, ..Default::default() };
+			let (cpubuf, cpualloc, _) = gfx
+				.allocator
+				.create_buffer(
+					&ash::vk::BufferCreateInfo::builder().size(size).usage(vk::BufferUsageFlags::TRANSFER_SRC).build(),
+					&create_info,
+				)
+				.unwrap();
 
-			let bufdata = gfx.device.map_memory(cpumem, 0, size, vk::MemoryMapFlags::empty()).unwrap();
+			let bufdata = gfx.allocator.map_memory(&cpualloc).unwrap();
 			let bufdata = slice::from_raw_parts_mut(bufdata as *mut T, (size / size_of::<T>() as u64) as _);
 			bufdata.clone_from_slice(data);
-			gfx.device.unmap_memory(cpumem);
+			gfx.allocator.unmap_memory(&cpualloc).unwrap();
 
-			let (buf, mem) = create_buffer(
-				&gfx,
-				size,
-				BufferUsageFlags::TRANSFER_DST | usage,
-				vk::MemoryPropertyFlags::DEVICE_LOCAL,
-			);
+			let create_info = AllocationCreateInfo { usage: MemoryUsage::CpuOnly, ..Default::default() };
+			let (buf, allocation, _) = gfx
+				.allocator
+				.create_buffer(
+					&ash::vk::BufferCreateInfo::builder()
+						.size(size)
+						.usage(usage | vk::BufferUsageFlags::TRANSFER_DST)
+						.build(),
+					&create_info,
+				)
+				.unwrap();
 
 			let fence = gfx.device.create_fence(&vk::FenceCreateInfo::builder(), None).unwrap();
 
@@ -54,11 +61,12 @@ impl<T: Clone> ImmutableBuffer<[T]> {
 
 			gfx.device.wait_for_fences(&[fence], false, !0).unwrap();
 
+			gfx.device.destroy_fence(fence, None);
 			gfx.device.free_command_buffers(gfx.cmdpool_transient, &cmds);
 			gfx.device.destroy_buffer(cpubuf, None);
-			gfx.device.free_memory(cpumem, None);
+			gfx.allocator.free_memory(&cpualloc).unwrap();
 
-			Self { gfx, buf, mem, len, _phantom: PhantomData }
+			Self { gfx, buf, allocation, len, _phantom: PhantomData }
 		}
 	}
 }
@@ -66,39 +74,7 @@ impl<T: ?Sized> Drop for ImmutableBuffer<T> {
 	fn drop(&mut self) {
 		unsafe {
 			self.gfx.device.destroy_buffer(self.buf, None);
-			self.gfx.device.free_memory(self.mem, None);
+			self.gfx.allocator.free_memory(&self.allocation).unwrap();
 		}
 	}
-}
-
-fn create_buffer(
-	gfx: &Gfx,
-	size: u64,
-	usage: BufferUsageFlags,
-	memflags: vk::MemoryPropertyFlags,
-) -> (vk::Buffer, vk::DeviceMemory) {
-	let ci = vk::BufferCreateInfo::builder().size(size).usage(usage).sharing_mode(vk::SharingMode::EXCLUSIVE);
-	let buf = unsafe { gfx.device.create_buffer(&ci, None) }.unwrap();
-
-	let reqs = unsafe { gfx.device.get_buffer_memory_requirements(buf) };
-	let memtype = find_memory_type(&gfx.memory_properties, reqs.memory_type_bits, memflags);
-	let ci = vk::MemoryAllocateInfo::builder().allocation_size(reqs.size).memory_type_index(memtype);
-	let mem = unsafe { gfx.device.allocate_memory(&ci, None) }.unwrap();
-
-	unsafe { gfx.device.bind_buffer_memory(buf, mem, 0) }.unwrap();
-
-	(buf, mem)
-}
-
-fn find_memory_type(
-	memprops: &vk::PhysicalDeviceMemoryProperties,
-	type_filter: u32,
-	properties: vk::MemoryPropertyFlags,
-) -> u32 {
-	(0..memprops.memory_type_count)
-		.filter(|&i| {
-			(type_filter & (1 << i) > 0) && !(memprops.memory_types[i as usize].property_flags & properties).is_empty()
-		})
-		.next()
-		.unwrap()
 }

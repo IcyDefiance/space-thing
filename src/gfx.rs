@@ -15,6 +15,7 @@ use std::{
 	slice,
 	sync::Arc,
 };
+use vk_mem::{Allocator, AllocatorCreateInfo};
 
 pub struct Gfx {
 	_entry: Entry,
@@ -29,7 +30,6 @@ pub struct Gfx {
 	khr_wayland_surface: khr::WaylandSurface,
 	debug_messenger: vk::DebugUtilsMessengerEXT,
 	physical_device: vk::PhysicalDevice,
-	memory_properties: vk::PhysicalDeviceMemoryProperties,
 	queue_family: u32,
 	device: Device,
 	khr_swapchain: khr::Swapchain,
@@ -37,6 +37,7 @@ pub struct Gfx {
 	cmdpool: vk::CommandPool,
 	cmdpool_transient: vk::CommandPool,
 	layout: vk::PipelineLayout,
+	allocator: Allocator,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
 }
@@ -93,7 +94,6 @@ impl Gfx {
 		let debug_messenger = unsafe { debug_utils.create_debug_utils_messenger(&ci, None) }.unwrap();
 
 		let physical_device = unsafe { instance.enumerate_physical_devices() }.unwrap()[0];
-		let memory_properties = unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
 		let queue_family = unsafe { instance.get_physical_device_queue_family_properties(physical_device) }
 			.into_iter()
@@ -121,6 +121,14 @@ impl Gfx {
 		let ci = vk::PipelineLayoutCreateInfo::builder();
 		let layout = unsafe { device.create_pipeline_layout(&ci, None) }.unwrap();
 
+		let ci = AllocatorCreateInfo {
+			physical_device,
+			device: device.clone(),
+			instance: instance.clone(),
+			..AllocatorCreateInfo::default()
+		};
+		let allocator = Allocator::new(&ci).unwrap();
+
 		let vshader = create_shader(&device, &vert_spv.await.unwrap());
 		let fshader = create_shader(&device, &frag_spv.await.unwrap());
 
@@ -137,7 +145,6 @@ impl Gfx {
 			khr_wayland_surface,
 			debug_messenger,
 			physical_device,
-			memory_properties,
 			queue_family,
 			device,
 			khr_swapchain,
@@ -145,6 +152,7 @@ impl Gfx {
 			cmdpool,
 			cmdpool_transient,
 			layout,
+			allocator,
 			vshader,
 			fshader,
 		})
@@ -155,6 +163,7 @@ impl Drop for Gfx {
 		unsafe {
 			self.device.destroy_shader_module(self.fshader, None);
 			self.device.destroy_shader_module(self.vshader, None);
+			self.allocator.destroy();
 			self.device.destroy_pipeline_layout(self.layout, None);
 			self.device.destroy_command_pool(self.cmdpool_transient, None);
 			self.device.destroy_command_pool(self.cmdpool, None);
