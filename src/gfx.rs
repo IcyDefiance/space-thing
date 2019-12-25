@@ -1,33 +1,41 @@
 pub mod buffer;
-pub mod volume;
 pub mod window;
 
 use crate::fs::read_bytes;
+#[cfg(debug_assertions)]
+use ash::extensions::ext;
 use ash::{
-	extensions::{ext, khr},
+	extensions::khr,
 	version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
 	vk, vk_make_version, Device, Entry, Instance,
 };
-use maplit::hashset;
+use buffer::create_device_local_buffer;
+use memoffset::offset_of;
+use nalgebra::Vector2;
+#[cfg(debug_assertions)]
+use std::ffi::c_void;
 use std::{
 	collections::HashSet,
-	ffi::{c_void, CStr, CString},
+	ffi::{CStr, CString},
+	mem::size_of,
 	slice,
 	sync::Arc,
 };
-use vk_mem::{Allocator, AllocatorCreateInfo};
+use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 
 pub struct Gfx {
 	_entry: Entry,
 	instance: Instance,
-	debug_utils: ext::DebugUtils,
 	khr_surface: khr::Surface,
+	#[cfg(debug_assertions)]
+	debug_utils: ext::DebugUtils,
 	#[cfg(windows)]
 	khr_win32_surface: khr::Win32Surface,
 	#[cfg(unix)]
 	khr_xlib_surface: khr::XlibSurface,
 	#[cfg(unix)]
 	khr_wayland_surface: khr::WaylandSurface,
+	#[cfg(debug_assertions)]
 	debug_messenger: vk::DebugUtilsMessengerEXT,
 	physical_device: vk::PhysicalDevice,
 	queue_family: u32,
@@ -38,6 +46,8 @@ pub struct Gfx {
 	cmdpool_transient: vk::CommandPool,
 	layout: vk::PipelineLayout,
 	allocator: Allocator,
+	triangle: vk::Buffer,
+	triangle_alloc: Allocation,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
 }
@@ -55,16 +65,19 @@ impl Gfx {
 			env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap(),
 			env!("CARGO_PKG_VERSION_PATCH").parse::<u32>().unwrap()
 		));
-		let mut exts = vec![b"VK_EXT_debug_utils\0".as_ptr() as _, b"VK_KHR_surface\0".as_ptr() as _];
-		if cfg!(windows) {
-			exts.push(b"VK_KHR_win32_surface\0".as_ptr() as _);
-		} else {
-			exts.push(b"VK_KHR_xlib_surface\0".as_ptr() as _);
-		}
-		let layers_pref = hashset! {
-			CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_standard_validation\0").unwrap(),
-			CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_monitor\0").unwrap(),
-		};
+
+		let mut exts = vec![b"VK_KHR_surface\0".as_ptr() as _];
+		#[cfg(debug_assertions)]
+		exts.push(b"VK_EXT_debug_utils\0".as_ptr() as _);
+		#[cfg(windows)]
+		exts.push(b"VK_KHR_win32_surface\0".as_ptr() as _);
+		#[cfg(unix)]
+		exts.push(b"VK_KHR_xlib_surface\0".as_ptr() as _);
+
+		#[allow(unused_mut)]
+		let mut layers_pref = HashSet::new();
+		#[cfg(debug_assertions)]
+		layers_pref.insert(CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_standard_validation\0").unwrap());
 		let layers = entry.enumerate_instance_layer_properties().unwrap();
 		let layers = layers
 			.iter()
@@ -73,13 +86,15 @@ impl Gfx {
 			.intersection(&layers_pref)
 			.map(|ext| ext.as_ptr())
 			.collect::<Vec<_>>();
+
 		let ci = vk::InstanceCreateInfo::builder()
 			.application_info(&app_info)
 			.enabled_layer_names(&layers)
 			.enabled_extension_names(&exts);
 		let instance = unsafe { entry.create_instance(&ci, None) }.unwrap();
-		let debug_utils = ext::DebugUtils::new(&entry, &instance);
 		let khr_surface = khr::Surface::new(&entry, &instance);
+		#[cfg(debug_assertions)]
+		let debug_utils = ext::DebugUtils::new(&entry, &instance);
 		#[cfg(windows)]
 		let khr_win32_surface = khr::Win32Surface::new(&entry, &instance);
 		#[cfg(unix)]
@@ -87,11 +102,14 @@ impl Gfx {
 		#[cfg(unix)]
 		let khr_wayland_surface = khr::WaylandSurface::new(&entry, &instance);
 
-		let ci = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-			.message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
-			.message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
-			.pfn_user_callback(Some(user_callback));
-		let debug_messenger = unsafe { debug_utils.create_debug_utils_messenger(&ci, None) }.unwrap();
+		#[cfg(debug_assertions)]
+		let debug_messenger = {
+			let ci = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+				.message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
+				.message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
+				.pfn_user_callback(Some(user_callback));
+			unsafe { debug_utils.create_debug_utils_messenger(&ci, None) }.unwrap()
+		};
 
 		let physical_device = unsafe { instance.enumerate_physical_devices() }.unwrap()[0];
 
@@ -129,20 +147,35 @@ impl Gfx {
 		};
 		let allocator = Allocator::new(&ci).unwrap();
 
+		let verts =
+			[TriangleVertex { pos: [-1.0, -1.0].into() }, TriangleVertex { pos: [3.0, -1.0].into() }, TriangleVertex {
+				pos: [-1.0, 3.0].into(),
+			}];
+		let (triangle, triangle_alloc) = create_device_local_buffer(
+			&device,
+			queue,
+			&allocator,
+			cmdpool_transient,
+			&verts,
+			vk::BufferUsageFlags::VERTEX_BUFFER,
+		);
+
 		let vshader = create_shader(&device, &vert_spv.await.unwrap());
 		let fshader = create_shader(&device, &frag_spv.await.unwrap());
 
 		Arc::new(Self {
 			_entry: entry,
 			instance,
-			debug_utils,
 			khr_surface,
+			#[cfg(debug_assertions)]
+			debug_utils,
 			#[cfg(windows)]
 			khr_win32_surface,
 			#[cfg(unix)]
 			khr_xlib_surface,
 			#[cfg(unix)]
 			khr_wayland_surface,
+			#[cfg(debug_assertions)]
 			debug_messenger,
 			physical_device,
 			queue_family,
@@ -153,6 +186,8 @@ impl Gfx {
 			cmdpool_transient,
 			layout,
 			allocator,
+			triangle,
+			triangle_alloc,
 			vshader,
 			fshader,
 		})
@@ -163,14 +198,41 @@ impl Drop for Gfx {
 		unsafe {
 			self.device.destroy_shader_module(self.fshader, None);
 			self.device.destroy_shader_module(self.vshader, None);
+			self.device.destroy_buffer(self.triangle, None);
+			self.allocator.free_memory(&self.triangle_alloc).unwrap();
 			self.allocator.destroy();
 			self.device.destroy_pipeline_layout(self.layout, None);
 			self.device.destroy_command_pool(self.cmdpool_transient, None);
 			self.device.destroy_command_pool(self.cmdpool, None);
 			self.device.destroy_device(None);
+			#[cfg(debug_assertions)]
 			self.debug_utils.destroy_debug_utils_messenger(self.debug_messenger, None);
 			self.instance.destroy_instance(None);
 		}
+	}
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct TriangleVertex {
+	pub pos: Vector2<f32>,
+}
+impl TriangleVertex {
+	fn binding_desc() -> vk::VertexInputBindingDescription {
+		vk::VertexInputBindingDescription::builder()
+			.binding(0)
+			.stride(size_of::<Self>() as _)
+			.input_rate(vk::VertexInputRate::VERTEX)
+			.build()
+	}
+
+	fn attribute_descs() -> [vk::VertexInputAttributeDescription; 1] {
+		[vk::VertexInputAttributeDescription::builder()
+			.binding(0)
+			.location(0)
+			.format(vk::Format::R32G32_SFLOAT)
+			.offset(offset_of!(Self, pos) as _)
+			.build()]
 	}
 }
 
@@ -180,6 +242,7 @@ fn create_shader(device: &Device, code: &[u8]) -> vk::ShaderModule {
 	unsafe { device.create_shader_module(&ci, None) }.unwrap()
 }
 
+#[cfg(debug_assertions)]
 unsafe extern "system" fn user_callback(
 	message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
 	message_types: vk::DebugUtilsMessageTypeFlagsEXT,

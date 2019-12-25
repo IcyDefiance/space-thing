@@ -1,21 +1,18 @@
-use crate::gfx::{volume::Volume, Gfx};
+use crate::gfx::{Gfx, TriangleVertex};
 use ash::{version::DeviceV1_0, vk, Device};
-use memoffset::offset_of;
-use nalgebra::{Vector2, Vector3};
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::{
 	cmp::{max, min},
 	ffi::CStr,
-	mem::size_of,
 	slice,
 	sync::Arc,
 	u32,
 };
-use winit::{EventsLoop, WindowBuilder};
+use winit::{event_loop::EventLoop, window::WindowBuilder};
 
 pub struct Window {
 	pub(super) gfx: Arc<Gfx>,
-	window: winit::Window,
+	window: winit::window::Window,
 	surface: vk::SurfaceKHR,
 	surface_format: vk::SurfaceFormatKHR,
 	pub(super) render_pass: vk::RenderPass,
@@ -26,12 +23,11 @@ pub struct Window {
 	pub(super) pipeline: vk::Pipeline,
 	pub(super) framebuffers: Vec<vk::Framebuffer>,
 	frame: bool,
-	volumes: [Vec<Arc<Volume>>; 2],
 	recreate_swapchain: bool,
 }
 impl Window {
-	pub fn new(gfx: Arc<Gfx>, events_loop: &EventsLoop) -> Self {
-		let window = WindowBuilder::new().with_dimensions((1440, 810).into()).build(&events_loop).unwrap();
+	pub fn new(gfx: Arc<Gfx>, event_loop: &EventLoop<()>) -> Self {
+		let window = WindowBuilder::new().with_inner_size((1440, 810).into()).build(&event_loop).unwrap();
 
 		let surface = match window.raw_window_handle() {
 			#[cfg(windows)]
@@ -114,12 +110,11 @@ impl Window {
 			pipeline,
 			framebuffers,
 			frame: false,
-			volumes: [vec![], vec![]],
 			recreate_swapchain: false,
 		}
 	}
 
-	pub fn draw(&mut self, volumes: Vec<Arc<Volume>>) {
+	pub fn draw(&mut self) {
 		unsafe {
 			if self.recreate_swapchain {
 				self.recreate_swapchain();
@@ -157,14 +152,16 @@ impl Window {
 
 			self.gfx.device.reset_command_pool(frame_data.cmdpool, vk::CommandPoolResetFlags::empty()).unwrap();
 
-			if frame_data.secondaries.len() < volumes.len() {
+			// TODO: replace with real volumes
+			let volumes_len = 2;
+			if frame_data.secondaries.len() < volumes_len {
 				let ci = vk::CommandBufferAllocateInfo::builder()
 					.command_pool(frame_data.cmdpool)
 					.level(vk::CommandBufferLevel::SECONDARY)
-					.command_buffer_count((volumes.len() - frame_data.secondaries.len()) as _);
+					.command_buffer_count((volumes_len - frame_data.secondaries.len()) as _);
 				frame_data.secondaries.extend(self.gfx.device.allocate_command_buffers(&ci).unwrap());
 			}
-			for (vol, &cmd) in volumes.iter().zip(&frame_data.secondaries) {
+			for (_, &cmd) in (0..volumes_len).zip(&frame_data.secondaries) {
 				let flags =
 					vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT | vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE;
 				let inherit = vk::CommandBufferInheritanceInfo::builder()
@@ -174,9 +171,8 @@ impl Window {
 				let info = vk::CommandBufferBeginInfo::builder().flags(flags).inheritance_info(&inherit);
 				self.gfx.device.begin_command_buffer(cmd, &info).unwrap();
 				self.gfx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
-				self.gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[vol.vertices.buf], &[0]);
-				self.gfx.device.cmd_bind_index_buffer(cmd, vol.indices.buf, 0, vk::IndexType::UINT32);
-				self.gfx.device.cmd_draw_indexed(cmd, vol.indices.len as _, 1, 0, 0, 0);
+				self.gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[self.gfx.triangle], &[0]);
+				self.gfx.device.cmd_draw(cmd, 3, 1, 0, 0);
 				self.gfx.device.end_command_buffer(cmd).unwrap();
 			}
 
@@ -192,7 +188,7 @@ impl Window {
 				&ci,
 				vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
 			);
-			self.gfx.device.cmd_execute_commands(frame_data.primary, &frame_data.secondaries[0..volumes.len()]);
+			self.gfx.device.cmd_execute_commands(frame_data.primary, &frame_data.secondaries[0..volumes_len]);
 			self.gfx.device.cmd_end_render_pass(frame_data.primary);
 			self.gfx.device.end_command_buffer(frame_data.primary).unwrap();
 			let submits = [vk::SubmitInfo::builder()
@@ -202,8 +198,6 @@ impl Window {
 				.signal_semaphores(&[frame_data.render_finished])
 				.build()];
 			self.gfx.device.queue_submit(self.gfx.queue, &submits, frame_data.frame_finished).unwrap();
-
-			self.volumes[frame] = volumes;
 
 			let ci = vk::PresentInfoKHR::builder()
 				.wait_semaphores(slice::from_ref(&frame_data.render_finished))
@@ -314,46 +308,17 @@ impl FrameData {
 	}
 }
 
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub struct Vertex {
-	pub pos: Vector2<f32>,
-	pub color: Vector3<f32>,
-}
-impl Vertex {
-	fn binding_desc() -> vk::VertexInputBindingDescription {
-		vk::VertexInputBindingDescription::builder()
-			.binding(0)
-			.stride(size_of::<Vertex>() as _)
-			.input_rate(vk::VertexInputRate::VERTEX)
-			.build()
-	}
-
-	fn attribute_descs() -> [vk::VertexInputAttributeDescription; 2] {
-		[
-			vk::VertexInputAttributeDescription::builder()
-				.binding(0)
-				.location(0)
-				.format(vk::Format::R32G32_SFLOAT)
-				.offset(offset_of!(Self, pos) as _)
-				.build(),
-			vk::VertexInputAttributeDescription::builder()
-				.binding(0)
-				.location(1)
-				.format(vk::Format::R32G32B32_SFLOAT)
-				.offset(offset_of!(Self, color) as _)
-				.build(),
-		]
-	}
-}
-
-fn get_caps(gfx: &Gfx, surface: vk::SurfaceKHR, window: &winit::Window) -> (vk::SurfaceCapabilitiesKHR, vk::Extent2D) {
+fn get_caps(
+	gfx: &Gfx,
+	surface: vk::SurfaceKHR,
+	window: &winit::window::Window,
+) -> (vk::SurfaceCapabilitiesKHR, vk::Extent2D) {
 	let caps =
 		unsafe { gfx.khr_surface.get_physical_device_surface_capabilities(gfx.physical_device, surface) }.unwrap();
 	let image_extent = if caps.current_extent.width != u32::MAX {
 		caps.current_extent
 	} else {
-		let (width, height) = window.get_inner_size().unwrap().to_physical(1.0).into();
+		let (width, height) = window.inner_size().to_physical(1.0).into();
 		vk::Extent2D {
 			width: max(caps.min_image_extent.width, min(caps.max_image_extent.width, width)),
 			height: max(caps.min_image_extent.height, min(caps.max_image_extent.height, height)),
@@ -436,8 +401,8 @@ fn create_pipeline(gfx: &Gfx, image_extent: vk::Extent2D, render_pass: vk::Rende
 			.name(CStr::from_bytes_with_nul(b"main\0").unwrap())
 			.build(),
 	];
-	let vertex_binding_descriptions = [Vertex::binding_desc()];
-	let vertex_attribute_descriptions = Vertex::attribute_descs();
+	let vertex_binding_descriptions = [TriangleVertex::binding_desc()];
+	let vertex_attribute_descriptions = TriangleVertex::attribute_descs();
 	let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
 		.vertex_binding_descriptions(&vertex_binding_descriptions)
 		.vertex_attribute_descriptions(&vertex_attribute_descriptions);
