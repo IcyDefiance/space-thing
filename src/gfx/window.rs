@@ -241,6 +241,8 @@ impl Window {
 
 			self.pipeline = create_pipeline(&self.gfx, image_extent, self.render_pass);
 			self.framebuffers = create_framebuffers(&self.gfx, &self.image_views, self.render_pass, image_extent);
+
+			self.image_extent = image_extent;
 		}
 	}
 }

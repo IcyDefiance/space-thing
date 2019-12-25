@@ -195,7 +195,6 @@ unsafe extern "system" fn user_callback(
 		log::warn!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
 	} else {
 		log::error!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
-		panic!();
 	}
 
 	vk::FALSE
