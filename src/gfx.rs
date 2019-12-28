@@ -1,5 +1,6 @@
 pub mod buffer;
 pub mod gui;
+pub mod volume;
 pub mod window;
 
 use crate::fs::read_bytes;
