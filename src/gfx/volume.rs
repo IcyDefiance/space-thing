@@ -35,7 +35,7 @@ impl Volume {
 			.sharing_mode(vk::SharingMode::EXCLUSIVE)
 			.initial_layout(vk::ImageLayout::UNDEFINED);
 		let aci = AllocationCreateInfo { usage: MemoryUsage::GpuOnly, ..Default::default() };
-		let (image, allocation, _) = gfx.allocator.create_image(&ci, &aci).unwrap();
+		let (image, allocation, _) = gfx.device.allocator.create_image(&ci, &aci).unwrap();
 
 		Self { image, allocation }
 	}

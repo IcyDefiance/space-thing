@@ -1,216 +1,84 @@
-pub mod buffer;
 pub mod gui;
 pub mod volume;
 pub mod window;
 
-use crate::fs::read_bytes;
-#[cfg(debug_assertions)]
-use ash::extensions::ext;
-use ash::{
-	extensions::khr,
-	version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
-	vk, vk_make_version, Device, Entry, Instance,
-};
-use buffer::create_device_local_buffer;
+use crate::fs::read_all_u32;
+use ash::vk;
 use memoffset::offset_of;
 use nalgebra::Vector2;
 #[cfg(debug_assertions)]
-use std::ffi::c_void;
-use std::{
-	collections::HashSet,
-	ffi::{CStr, CString},
-	mem::size_of,
-	slice,
-	sync::Arc,
+use std::ffi::CString;
+use std::{mem::size_of, sync::Arc};
+use typenum::{B0, B1};
+use vulkan::{
+	buffer::Buffer,
+	device::{BufferUsageFlags, Device, Queue},
+	instance::{Instance, Version},
+	pipeline::PipelineLayout,
+	shader::ShaderModule,
+	Vulkan,
 };
-use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 
 pub struct Gfx {
-	_entry: Entry,
-	instance: Instance,
-	khr_surface: khr::Surface,
-	#[cfg(debug_assertions)]
-	debug_utils: ext::DebugUtils,
-	#[cfg(windows)]
-	khr_win32_surface: khr::Win32Surface,
-	#[cfg(unix)]
-	khr_xlib_surface: khr::XlibSurface,
-	#[cfg(unix)]
-	khr_wayland_surface: khr::WaylandSurface,
-	#[cfg(debug_assertions)]
-	debug_messenger: vk::DebugUtilsMessengerEXT,
-	physical_device: vk::PhysicalDevice,
-	queue_family: u32,
-	device: Device,
-	khr_swapchain: khr::Swapchain,
-	queue: vk::Queue,
-	cmdpool: vk::CommandPool,
-	cmdpool_transient: vk::CommandPool,
-	layout: vk::PipelineLayout,
-	allocator: Allocator,
-	triangle: vk::Buffer,
-	triangle_alloc: Allocation,
-	vshader: vk::ShaderModule,
-	fshader: vk::ShaderModule,
+	instance: Arc<Instance>,
+	device: Arc<Device>,
+	queue: Arc<Queue>,
+	layout: PipelineLayout,
+	triangle: Arc<Buffer<[TriangleVertex]>>,
+	vshader: ShaderModule,
+	fshader: ShaderModule,
 }
 impl Gfx {
 	pub async fn new() -> Arc<Self> {
 		// start reading files now to use later
-		let vert_spv = read_bytes("build/shader.vert.spv");
-		let frag_spv = read_bytes("build/shader.frag.spv");
+		let vert_spv = read_all_u32("build/shader.vert.spv");
+		let frag_spv = read_all_u32("build/shader.frag.spv");
 
-		let entry = Entry::new().unwrap();
+		let vulkan = Vulkan::new().unwrap();
 
 		let name = CString::new(env!("CARGO_PKG_NAME")).unwrap();
-		let app_info = vk::ApplicationInfo::builder().application_name(&name).application_version(vk_make_version!(
-			env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap(),
-			env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap(),
-			env!("CARGO_PKG_VERSION_PATCH").parse::<u32>().unwrap()
-		));
+		let version = Version::new(
+			env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap(),
+			env!("CARGO_PKG_VERSION_MINOR").parse().unwrap(),
+			env!("CARGO_PKG_VERSION_PATCH").parse().unwrap(),
+		);
+		let instance = Instance::new(vulkan, &name, version);
 
-		let mut exts = vec![b"VK_KHR_surface\0".as_ptr() as _];
-		#[cfg(debug_assertions)]
-		exts.push(b"VK_EXT_debug_utils\0".as_ptr() as _);
-		#[cfg(windows)]
-		exts.push(b"VK_KHR_win32_surface\0".as_ptr() as _);
-		#[cfg(unix)]
-		exts.push(b"VK_KHR_xlib_surface\0".as_ptr() as _);
+		let (device, mut queue) = {
+			let physical_device = instance.enumerate_physical_devices().next().unwrap();
 
-		#[allow(unused_mut)]
-		let mut layers_pref = HashSet::new();
-		#[cfg(debug_assertions)]
-		layers_pref.insert(CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_standard_validation\0").unwrap());
-		let layers = entry.enumerate_instance_layer_properties().unwrap();
-		let layers = layers
-			.iter()
-			.map(|props| unsafe { CStr::from_ptr(props.layer_name.as_ptr()) })
-			.collect::<HashSet<_>>()
-			.intersection(&layers_pref)
-			.map(|ext| ext.as_ptr())
-			.collect::<Vec<_>>();
+			let queue_family = physical_device
+				.get_queue_family_properties()
+				.filter(|props| props.queue_flags().graphics())
+				.next()
+				.unwrap()
+				.family();
 
-		let ci = vk::InstanceCreateInfo::builder()
-			.application_info(&app_info)
-			.enabled_layer_names(&layers)
-			.enabled_extension_names(&exts);
-		let instance = unsafe { entry.create_instance(&ci, None) }.unwrap();
-		let khr_surface = khr::Surface::new(&entry, &instance);
-		#[cfg(debug_assertions)]
-		let debug_utils = ext::DebugUtils::new(&entry, &instance);
-		#[cfg(windows)]
-		let khr_win32_surface = khr::Win32Surface::new(&entry, &instance);
-		#[cfg(unix)]
-		let khr_xlib_surface = khr::XlibSurface::new(&entry, &instance);
-		#[cfg(unix)]
-		let khr_wayland_surface = khr::WaylandSurface::new(&entry, &instance);
-
-		#[cfg(debug_assertions)]
-		let debug_messenger = {
-			let ci = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-				.message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
-				.message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
-				.pfn_user_callback(Some(user_callback));
-			unsafe { debug_utils.create_debug_utils_messenger(&ci, None) }.unwrap()
+			let (device, mut queues) = physical_device.create_device(vec![(queue_family, &[1.0][..])]);
+			(device, queues.next().unwrap())
 		};
 
-		let physical_device = unsafe { instance.enumerate_physical_devices() }.unwrap()[0];
+		let layout = device.create_pipeline_layout();
 
-		let queue_family = unsafe { instance.get_physical_device_queue_family_properties(physical_device) }
-			.into_iter()
-			.enumerate()
-			.filter(|(_, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS))
-			.next()
-			.unwrap()
-			.0 as u32;
-		let qci =
-			[vk::DeviceQueueCreateInfo::builder().queue_family_index(queue_family).queue_priorities(&[1.0]).build()];
-
-		let exts = [b"VK_KHR_swapchain\0".as_ptr() as _];
-		let ci = vk::DeviceCreateInfo::builder().queue_create_infos(&qci).enabled_extension_names(&exts);
-		let device = unsafe { instance.create_device(physical_device, &ci, None) }.unwrap();
-		let khr_swapchain = khr::Swapchain::new(&instance, &device);
-
-		let queue = unsafe { device.get_device_queue(queue_family, 0) };
-
-		let ci = vk::CommandPoolCreateInfo::builder().queue_family_index(queue_family);
-		let cmdpool = unsafe { device.create_command_pool(&ci, None) }.unwrap();
-
-		let ci = ci.flags(vk::CommandPoolCreateFlags::TRANSIENT);
-		let cmdpool_transient = unsafe { device.create_command_pool(&ci, None) }.unwrap();
-
-		let ci = vk::PipelineLayoutCreateInfo::builder();
-		let layout = unsafe { device.create_pipeline_layout(&ci, None) }.unwrap();
-
-		let ci = AllocatorCreateInfo {
-			physical_device,
-			device: device.clone(),
-			instance: instance.clone(),
-			..AllocatorCreateInfo::default()
-		};
-		let allocator = Allocator::new(&ci).unwrap();
+		let cmdpool = device.create_command_pool(queue.family(), true);
 
 		let verts =
 			[TriangleVertex { pos: [-1.0, -1.0].into() }, TriangleVertex { pos: [3.0, -1.0].into() }, TriangleVertex {
 				pos: [-1.0, 3.0].into(),
 			}];
-		let (triangle, triangle_alloc) = create_device_local_buffer(
-			&device,
-			queue,
-			&allocator,
-			cmdpool_transient,
-			&verts,
-			vk::BufferUsageFlags::VERTEX_BUFFER,
-		);
+		let triangle =
+			device.create_buffer_slice(verts.len() as _, B1, BufferUsageFlags::TRANSFER_SRC).copy_from_slice(&verts);
+		let (triangle, future) = device
+			.create_buffer_slice(verts.len() as _, B0, BufferUsageFlags::TRANSFER_DST | BufferUsageFlags::VERTEX_BUFFER)
+			.copy_from_buffer(&mut queue, &cmdpool, triangle);
+		let mut fence = device.create_fence(false);
+		future.end(&mut fence);
+		fence.wait();
 
-		let vshader = create_shader(&device, &vert_spv.await.unwrap());
-		let fshader = create_shader(&device, &frag_spv.await.unwrap());
+		let vshader = unsafe { device.create_shader_module(&vert_spv.await.unwrap()) };
+		let fshader = unsafe { device.create_shader_module(&frag_spv.await.unwrap()) };
 
-		Arc::new(Self {
-			_entry: entry,
-			instance,
-			khr_surface,
-			#[cfg(debug_assertions)]
-			debug_utils,
-			#[cfg(windows)]
-			khr_win32_surface,
-			#[cfg(unix)]
-			khr_xlib_surface,
-			#[cfg(unix)]
-			khr_wayland_surface,
-			#[cfg(debug_assertions)]
-			debug_messenger,
-			physical_device,
-			queue_family,
-			device,
-			khr_swapchain,
-			queue,
-			cmdpool,
-			cmdpool_transient,
-			layout,
-			allocator,
-			triangle,
-			triangle_alloc,
-			vshader,
-			fshader,
-		})
-	}
-}
-impl Drop for Gfx {
-	fn drop(&mut self) {
-		unsafe {
-			self.device.destroy_shader_module(self.fshader, None);
-			self.device.destroy_shader_module(self.vshader, None);
-			self.device.destroy_buffer(self.triangle, None);
-			self.allocator.free_memory(&self.triangle_alloc).unwrap();
-			self.allocator.destroy();
-			self.device.destroy_pipeline_layout(self.layout, None);
-			self.device.destroy_command_pool(self.cmdpool_transient, None);
-			self.device.destroy_command_pool(self.cmdpool, None);
-			self.device.destroy_device(None);
-			#[cfg(debug_assertions)]
-			self.debug_utils.destroy_debug_utils_messenger(self.debug_messenger, None);
-			self.instance.destroy_instance(None);
-		}
+		Arc::new(Self { instance, device, queue, layout, triangle, vshader, fshader })
 	}
 }
 
@@ -236,31 +104,4 @@ impl TriangleVertex {
 			.offset(offset_of!(Self, pos) as _)
 			.build()]
 	}
-}
-
-fn create_shader(device: &Device, code: &[u8]) -> vk::ShaderModule {
-	let code = unsafe { slice::from_raw_parts(code.as_ptr() as _, code.len() / 4) };
-	let ci = vk::ShaderModuleCreateInfo::builder().code(code);
-	unsafe { device.create_shader_module(&ci, None) }.unwrap()
-}
-
-#[cfg(debug_assertions)]
-unsafe extern "system" fn user_callback(
-	message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-	message_types: vk::DebugUtilsMessageTypeFlagsEXT,
-	p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
-	_p_user_data: *mut c_void,
-) -> vk::Bool32 {
-	let callback_data = &*p_callback_data;
-	if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE) {
-		log::debug!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
-	} else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::INFO) {
-		log::info!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
-	} else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
-		log::warn!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
-	} else {
-		log::error!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
-	}
-
-	vk::FALSE
 }

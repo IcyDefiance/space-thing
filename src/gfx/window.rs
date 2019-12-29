@@ -33,33 +33,37 @@ impl Window {
 			#[cfg(windows)]
 			RawWindowHandle::Windows(handle) => {
 				let ci = vk::Win32SurfaceCreateInfoKHR::builder().hinstance(handle.hinstance).hwnd(handle.hwnd);
-				unsafe { gfx.khr_win32_surface.create_win32_surface(&ci, None) }.unwrap()
+				unsafe { gfx.instance.khr_win32_surface.create_win32_surface(&ci, None) }.unwrap()
 			},
 			#[cfg(unix)]
 			RawWindowHandle::Xlib(handle) => {
 				let ci = vk::XlibSurfaceCreateInfoKHR::builder().dpy(handle.display as _).window(handle.window);
-				unsafe { gfx.khr_xlib_surface.create_xlib_surface(&ci, None) }.unwrap()
+				unsafe { gfx.instance.khr_xlib_surface.create_xlib_surface(&ci, None) }.unwrap()
 			},
 			#[cfg(unix)]
 			RawWindowHandle::Wayland(handle) => {
 				let ci = vk::WaylandSurfaceCreateInfoKHR::builder().display(handle.display).surface(handle.surface);
-				unsafe { gfx.khr_wayland_surface.create_wayland_surface(&ci, None) }.unwrap()
+				unsafe { gfx.instance.khr_wayland_surface.create_wayland_surface(&ci, None) }.unwrap()
 			},
 			_ => unimplemented!(),
 		};
 		assert!(unsafe {
-			gfx.khr_surface.get_physical_device_surface_support(gfx.physical_device, gfx.queue_family, surface)
+			gfx.instance.khr_surface.get_physical_device_surface_support(
+				gfx.device.physical_device().vk,
+				gfx.queue.family().idx,
+				surface,
+			)
 		});
 
-		let surface_format =
-			unsafe { gfx.khr_surface.get_physical_device_surface_formats(gfx.physical_device, surface) }
-				.unwrap()
-				.into_iter()
-				.max_by_key(|format| {
-					format.format == vk::Format::B8G8R8A8_UNORM
-						&& format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-				})
-				.unwrap();
+		let surface_format = unsafe {
+			gfx.instance.khr_surface.get_physical_device_surface_formats(gfx.device.physical_device().vk, surface)
+		}
+		.unwrap()
+		.into_iter()
+		.max_by_key(|format| {
+			format.format == vk::Format::B8G8R8A8_UNORM && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+		})
+		.unwrap();
 
 		let attachments = [vk::AttachmentDescription::builder()
 			.format(surface_format.format)
@@ -87,7 +91,7 @@ impl Window {
 			.attachments(&attachments)
 			.subpasses(&subpasses)
 			.dependencies(&dependencies);
-		let render_pass = unsafe { gfx.device.create_render_pass(&ci, None) }.unwrap();
+		let render_pass = unsafe { gfx.device.vk.create_render_pass(&ci, None) }.unwrap();
 
 		let (caps, image_extent) = get_caps(&gfx, surface, &window);
 		let (swapchain, image_views) =
@@ -123,7 +127,7 @@ impl Window {
 			let frame = self.frame as usize;
 			let frame_data = &mut self.frame_data[frame];
 
-			let res = self.gfx.khr_swapchain.acquire_next_image(
+			let res = self.gfx.device.khr_swapchain.acquire_next_image(
 				self.swapchain,
 				!0,
 				frame_data.image_available,
@@ -144,13 +148,13 @@ impl Window {
 			};
 			let image_uidx = image_idx as usize;
 
-			self.gfx.device.wait_for_fences(&[frame_data.frame_finished], false, !0).unwrap();
-			self.gfx.device.reset_fences(&[frame_data.frame_finished]).unwrap();
+			self.gfx.device.vk.wait_for_fences(&[frame_data.frame_finished], false, !0).unwrap();
+			self.gfx.device.vk.reset_fences(&[frame_data.frame_finished]).unwrap();
 			self.frame = !self.frame;
 
 			let framebuffer = self.framebuffers[image_uidx];
 
-			self.gfx.device.reset_command_pool(frame_data.cmdpool, vk::CommandPoolResetFlags::empty()).unwrap();
+			self.gfx.device.vk.reset_command_pool(frame_data.cmdpool, vk::CommandPoolResetFlags::empty()).unwrap();
 
 			// TODO: replace with real volumes
 			let volumes_len = 2;
@@ -159,7 +163,7 @@ impl Window {
 					.command_pool(frame_data.cmdpool)
 					.level(vk::CommandBufferLevel::SECONDARY)
 					.command_buffer_count((volumes_len - frame_data.secondaries.len()) as _);
-				frame_data.secondaries.extend(self.gfx.device.allocate_command_buffers(&ci).unwrap());
+				frame_data.secondaries.extend(self.gfx.device.vk.allocate_command_buffers(&ci).unwrap());
 			}
 			for (_, &cmd) in (0..volumes_len).zip(&frame_data.secondaries) {
 				let flags =
@@ -169,41 +173,41 @@ impl Window {
 					.subpass(0)
 					.framebuffer(framebuffer);
 				let info = vk::CommandBufferBeginInfo::builder().flags(flags).inheritance_info(&inherit);
-				self.gfx.device.begin_command_buffer(cmd, &info).unwrap();
-				self.gfx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
-				self.gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[self.gfx.triangle], &[0]);
-				self.gfx.device.cmd_draw(cmd, 3, 1, 0, 0);
-				self.gfx.device.end_command_buffer(cmd).unwrap();
+				self.gfx.device.vk.begin_command_buffer(cmd, &info).unwrap();
+				self.gfx.device.vk.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
+				self.gfx.device.vk.cmd_bind_vertex_buffers(cmd, 0, &[self.gfx.triangle.vk], &[0]);
+				self.gfx.device.vk.cmd_draw(cmd, 3, 1, 0, 0);
+				self.gfx.device.vk.end_command_buffer(cmd).unwrap();
 			}
 
 			let bi = vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-			self.gfx.device.begin_command_buffer(frame_data.primary, &bi).unwrap();
+			self.gfx.device.vk.begin_command_buffer(frame_data.primary, &bi).unwrap();
 			let ci = vk::RenderPassBeginInfo::builder()
 				.render_pass(self.render_pass)
 				.framebuffer(framebuffer)
 				.render_area(vk::Rect2D::builder().extent(self.image_extent).build())
 				.clear_values(&[vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } }]);
-			self.gfx.device.cmd_begin_render_pass(
+			self.gfx.device.vk.cmd_begin_render_pass(
 				frame_data.primary,
 				&ci,
 				vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
 			);
-			self.gfx.device.cmd_execute_commands(frame_data.primary, &frame_data.secondaries[0..volumes_len]);
-			self.gfx.device.cmd_end_render_pass(frame_data.primary);
-			self.gfx.device.end_command_buffer(frame_data.primary).unwrap();
+			self.gfx.device.vk.cmd_execute_commands(frame_data.primary, &frame_data.secondaries[0..volumes_len]);
+			self.gfx.device.vk.cmd_end_render_pass(frame_data.primary);
+			self.gfx.device.vk.end_command_buffer(frame_data.primary).unwrap();
 			let submits = [vk::SubmitInfo::builder()
 				.wait_semaphores(&[frame_data.image_available])
 				.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
 				.command_buffers(&[frame_data.primary])
 				.signal_semaphores(&[frame_data.render_finished])
 				.build()];
-			self.gfx.device.queue_submit(self.gfx.queue, &submits, frame_data.frame_finished).unwrap();
+			self.gfx.device.vk.queue_submit(self.gfx.queue.vk, &submits, frame_data.frame_finished).unwrap();
 
 			let ci = vk::PresentInfoKHR::builder()
 				.wait_semaphores(slice::from_ref(&frame_data.render_finished))
 				.swapchains(slice::from_ref(&self.swapchain))
 				.image_indices(slice::from_ref(&image_idx));
-			match self.gfx.khr_swapchain.queue_present(self.gfx.queue, &ci) {
+			match self.gfx.device.khr_swapchain.queue_present(self.gfx.queue.vk, &ci) {
 				Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => self.recreate_swapchain = true,
 				Ok(false) => (),
 				Err(err) => panic!(err),
@@ -215,21 +219,22 @@ impl Window {
 		unsafe {
 			self.gfx
 				.device
+				.vk
 				.wait_for_fences(&[self.frame_data[(!self.frame) as usize].frame_finished], false, !0)
 				.unwrap();
 
 			for &framebuffer in &self.framebuffers {
-				self.gfx.device.destroy_framebuffer(framebuffer, None);
+				self.gfx.device.vk.destroy_framebuffer(framebuffer, None);
 			}
-			self.gfx.device.destroy_pipeline(self.pipeline, None);
+			self.gfx.device.vk.destroy_pipeline(self.pipeline, None);
 			for &image_view in &self.image_views {
-				self.gfx.device.destroy_image_view(image_view, None);
+				self.gfx.device.vk.destroy_image_view(image_view, None);
 			}
 
 			let (caps, image_extent) = get_caps(&self.gfx, self.surface, &self.window);
 			let (swapchain, image_views) =
 				create_swapchain(&self.gfx, self.surface, &caps, &self.surface_format, image_extent, self.swapchain);
-			self.gfx.khr_swapchain.destroy_swapchain(self.swapchain, None);
+			self.gfx.device.khr_swapchain.destroy_swapchain(self.swapchain, None);
 			self.swapchain = swapchain;
 			self.image_views = image_views;
 
@@ -245,22 +250,23 @@ impl Drop for Window {
 		unsafe {
 			self.gfx
 				.device
+				.vk
 				.wait_for_fences(&[self.frame_data[(!self.frame) as usize].frame_finished], false, !0)
 				.unwrap();
 
-			self.frame_data[0].dispose(&self.gfx.device);
-			self.frame_data[1].dispose(&self.gfx.device);
+			self.frame_data[0].dispose(&self.gfx.device.vk);
+			self.frame_data[1].dispose(&self.gfx.device.vk);
 
 			for &framebuffer in &self.framebuffers {
-				self.gfx.device.destroy_framebuffer(framebuffer, None);
+				self.gfx.device.vk.destroy_framebuffer(framebuffer, None);
 			}
-			self.gfx.device.destroy_pipeline(self.pipeline, None);
+			self.gfx.device.vk.destroy_pipeline(self.pipeline, None);
 			for &image_view in &self.image_views {
-				self.gfx.device.destroy_image_view(image_view, None);
+				self.gfx.device.vk.destroy_image_view(image_view, None);
 			}
-			self.gfx.khr_swapchain.destroy_swapchain(self.swapchain, None);
-			self.gfx.device.destroy_render_pass(self.render_pass, None);
-			self.gfx.khr_surface.destroy_surface(self.surface, None);
+			self.gfx.device.khr_swapchain.destroy_swapchain(self.swapchain, None);
+			self.gfx.device.vk.destroy_render_pass(self.render_pass, None);
+			self.gfx.instance.khr_surface.destroy_surface(self.surface, None);
 		}
 	}
 }
@@ -276,22 +282,22 @@ struct FrameData {
 impl FrameData {
 	fn new(gfx: &Arc<Gfx>) -> Self {
 		unsafe {
-			let image_available = gfx.device.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None).unwrap();
-			let render_finished = gfx.device.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None).unwrap();
+			let image_available = gfx.device.vk.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None).unwrap();
+			let render_finished = gfx.device.vk.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None).unwrap();
 
 			let ci = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
-			let frame_finished = gfx.device.create_fence(&ci, None).unwrap();
+			let frame_finished = gfx.device.vk.create_fence(&ci, None).unwrap();
 
 			let ci = vk::CommandPoolCreateInfo::builder()
 				.flags(vk::CommandPoolCreateFlags::TRANSIENT)
-				.queue_family_index(gfx.queue_family);
-			let cmdpool = gfx.device.create_command_pool(&ci, None).unwrap();
+				.queue_family_index(gfx.queue.family().idx);
+			let cmdpool = gfx.device.vk.create_command_pool(&ci, None).unwrap();
 
 			let ci = vk::CommandBufferAllocateInfo::builder()
 				.command_pool(cmdpool)
 				.level(vk::CommandBufferLevel::PRIMARY)
 				.command_buffer_count(1);
-			let primary = gfx.device.allocate_command_buffers(&ci).unwrap()[0];
+			let primary = gfx.device.vk.allocate_command_buffers(&ci).unwrap()[0];
 
 			Self { image_available, render_finished, frame_finished, cmdpool, primary, secondaries: vec![] }
 		}
@@ -313,8 +319,10 @@ fn get_caps(
 	surface: vk::SurfaceKHR,
 	window: &winit::window::Window,
 ) -> (vk::SurfaceCapabilitiesKHR, vk::Extent2D) {
-	let caps =
-		unsafe { gfx.khr_surface.get_physical_device_surface_capabilities(gfx.physical_device, surface) }.unwrap();
+	let caps = unsafe {
+		gfx.instance.khr_surface.get_physical_device_surface_capabilities(gfx.device.physical_device().vk, surface)
+	}
+	.unwrap();
 	let image_extent = if caps.current_extent.width != u32::MAX {
 		caps.current_extent
 	} else {
@@ -336,19 +344,20 @@ fn create_swapchain(
 	image_extent: vk::Extent2D,
 	old_swapchain: vk::SwapchainKHR,
 ) -> (vk::SwapchainKHR, std::vec::Vec<vk::ImageView>) {
-	let queue_family_indices = [gfx.queue_family];
-	let present_mode =
-		unsafe { gfx.khr_surface.get_physical_device_surface_present_modes(gfx.physical_device, surface) }
-			.unwrap()
-			.into_iter()
-			.min_by_key(|&mode| match mode {
-				vk::PresentModeKHR::MAILBOX => 0,
-				vk::PresentModeKHR::IMMEDIATE => 1,
-				vk::PresentModeKHR::FIFO_RELAXED => 2,
-				vk::PresentModeKHR::FIFO => 3,
-				_ => 4,
-			})
-			.unwrap();
+	let queue_family_indices = [gfx.queue.family().idx];
+	let present_mode = unsafe {
+		gfx.instance.khr_surface.get_physical_device_surface_present_modes(gfx.device.physical_device().vk, surface)
+	}
+	.unwrap()
+	.into_iter()
+	.min_by_key(|&mode| match mode {
+		vk::PresentModeKHR::MAILBOX => 0,
+		vk::PresentModeKHR::IMMEDIATE => 1,
+		vk::PresentModeKHR::FIFO_RELAXED => 2,
+		vk::PresentModeKHR::FIFO => 3,
+		_ => 4,
+	})
+	.unwrap();
 	let ci = vk::SwapchainCreateInfoKHR::builder()
 		.surface(surface)
 		.min_image_count(caps.min_image_count + 1)
@@ -364,9 +373,9 @@ fn create_swapchain(
 		.present_mode(present_mode)
 		.clipped(true)
 		.old_swapchain(old_swapchain);
-	let swapchain = unsafe { gfx.khr_swapchain.create_swapchain(&ci, None) }.unwrap();
+	let swapchain = unsafe { gfx.device.khr_swapchain.create_swapchain(&ci, None) }.unwrap();
 
-	let image_views: Vec<_> = unsafe { gfx.khr_swapchain.get_swapchain_images(swapchain) }
+	let image_views: Vec<_> = unsafe { gfx.device.khr_swapchain.get_swapchain_images(swapchain) }
 		.unwrap()
 		.into_iter()
 		.map(|image| {
@@ -381,7 +390,7 @@ fn create_swapchain(
 						.layer_count(1)
 						.build(),
 				);
-			unsafe { gfx.device.create_image_view(&ci, None) }.unwrap()
+			unsafe { gfx.device.vk.create_image_view(&ci, None) }.unwrap()
 		})
 		.collect();
 
@@ -392,12 +401,12 @@ fn create_pipeline(gfx: &Gfx, image_extent: vk::Extent2D, render_pass: vk::Rende
 	let stages = [
 		vk::PipelineShaderStageCreateInfo::builder()
 			.stage(vk::ShaderStageFlags::VERTEX)
-			.module(gfx.vshader)
+			.module(gfx.vshader.vk)
 			.name(CStr::from_bytes_with_nul(b"main\0").unwrap())
 			.build(),
 		vk::PipelineShaderStageCreateInfo::builder()
 			.stage(vk::ShaderStageFlags::FRAGMENT)
-			.module(gfx.fshader)
+			.module(gfx.fshader.vk)
 			.name(CStr::from_bytes_with_nul(b"main\0").unwrap())
 			.build(),
 	];
@@ -433,10 +442,10 @@ fn create_pipeline(gfx: &Gfx, image_extent: vk::Extent2D, render_pass: vk::Rende
 		.rasterization_state(&rasterization_state)
 		.multisample_state(&multisample_state)
 		.color_blend_state(&color_blend_state)
-		.layout(gfx.layout)
+		.layout(gfx.layout.vk)
 		.render_pass(render_pass)
 		.build()];
-	unsafe { gfx.device.create_graphics_pipelines(vk::PipelineCache::null(), &cis, None) }.unwrap()[0]
+	unsafe { gfx.device.vk.create_graphics_pipelines(vk::PipelineCache::null(), &cis, None) }.unwrap()[0]
 }
 
 fn create_framebuffers(
@@ -454,7 +463,7 @@ fn create_framebuffers(
 				.width(image_extent.width)
 				.height(image_extent.height)
 				.layers(1);
-			unsafe { gfx.device.create_framebuffer(&ci, None) }.unwrap()
+			unsafe { gfx.device.vk.create_framebuffer(&ci, None) }.unwrap()
 		})
 		.collect()
 }

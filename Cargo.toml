@@ -7,6 +7,7 @@ build = "build.rs"
 
 [dependencies]
 ash = "0.29.0"
+byteorder = "1.3.2"
 futures = { version = "0.3.1", features = ["thread-pool"] }
 lazy_static = "1.4.0"
 log = "0.4.8"
@@ -15,8 +16,13 @@ memoffset = "0.5.3"
 nalgebra = "0.19.0"
 raw-window-handle = "0.3.3"
 simplelog = "0.7.4"
+typenum = "1.11.2"
 vk-mem = "0.2.0"
+vulkan = { path = "vulkan" }
 winit = "0.20.0-alpha5"
 
 [build-dependencies]
 shaderc = "0.6.1"
+
+[workspace]
+members = ["vulkan"]
