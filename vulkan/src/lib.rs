@@ -1,14 +1,20 @@
 pub mod buffer;
 pub mod command;
 pub mod device;
+pub mod image;
 pub mod instance;
 pub mod physical_device;
 pub mod pipeline;
+pub mod render_pass;
 pub mod shader;
 pub mod surface;
+pub mod swapchain;
 pub mod sync;
 
-pub use ash::LoadingError;
+pub use ash::{
+	vk::{Extent2D, Offset2D},
+	LoadingError,
+};
 
 use ash::Entry;
 use std::sync::Arc;

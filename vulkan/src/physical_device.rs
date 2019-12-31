@@ -1,7 +1,7 @@
 use crate::{
 	device::{Device, Queue},
 	instance::Instance,
-	surface::Surface,
+	surface::{PresentMode, Surface, SurfaceCapabilities, SurfaceFormat},
 };
 use ash::{version::InstanceV1_0, vk};
 use std::sync::Arc;
@@ -46,7 +46,19 @@ impl<'a> PhysicalDevice<'a> {
 		unsafe { self.instance.vk.get_physical_device_queue_family_properties(self.vk) }
 			.into_iter()
 			.enumerate()
-			.map(move |(i, vk)| QueueFamilyProperties { family: QueueFamily { pdev: self, idx: i as _ }, vk })
+			.map(move |(i, vk)| QueueFamilyProperties { family: QueueFamily::from_vk(self, i as _), vk })
+	}
+
+	pub fn get_surface_capabilities<T>(&self, surface: &Surface<T>) -> SurfaceCapabilities {
+		unsafe { self.instance.khr_surface.get_physical_device_surface_capabilities(self.vk, surface.vk) }.unwrap()
+	}
+
+	pub fn get_surface_formats<T>(&self, surface: &Surface<T>) -> Vec<SurfaceFormat> {
+		unsafe { self.instance.khr_surface.get_physical_device_surface_formats(self.vk, surface.vk) }.unwrap()
+	}
+
+	pub fn get_surface_present_modes<T>(&self, surface: &Surface<T>) -> Vec<PresentMode> {
+		unsafe { self.instance.khr_surface.get_physical_device_surface_present_modes(self.vk, surface.vk) }.unwrap()
 	}
 
 	pub fn get_surface_support<T>(&self, qfam: QueueFamily, surface: &Surface<T>) -> bool {
@@ -84,16 +96,16 @@ impl<'a> QueueFamilyProperties<'a> {
 
 #[derive(Clone, Copy)]
 pub struct QueueFamily<'a> {
-	pdev: PhysicalDevice<'a>,
+	physical_device: PhysicalDevice<'a>,
 	pub idx: u32,
 }
 impl<'a> QueueFamily<'a> {
 	pub fn physical_device(&self) -> PhysicalDevice {
-		self.pdev
+		self.physical_device
 	}
 
-	pub(crate) fn from_vk(pdev: PhysicalDevice<'a>, idx: u32) -> Self {
-		Self { pdev, idx }
+	pub(crate) fn from_vk(physical_device: PhysicalDevice<'a>, idx: u32) -> Self {
+		Self { physical_device, idx }
 	}
 }
 

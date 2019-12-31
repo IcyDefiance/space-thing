@@ -8,13 +8,13 @@ use memoffset::offset_of;
 use nalgebra::Vector2;
 #[cfg(debug_assertions)]
 use std::ffi::CString;
-use std::{mem::size_of, sync::Arc};
+use std::sync::Arc;
 use typenum::{B0, B1};
 use vulkan::{
 	buffer::Buffer,
 	device::{BufferUsageFlags, Device, Queue},
 	instance::{Instance, Version},
-	pipeline::PipelineLayout,
+	pipeline::{PipelineLayout, VertexDesc},
 	shader::ShaderModule,
 	Vulkan,
 };
@@ -23,10 +23,10 @@ pub struct Gfx {
 	instance: Arc<Instance>,
 	device: Arc<Device>,
 	queue: Arc<Queue>,
-	layout: PipelineLayout,
+	layout: Arc<PipelineLayout>,
 	triangle: Arc<Buffer<[TriangleVertex]>>,
-	vshader: ShaderModule,
-	fshader: ShaderModule,
+	vshader: Arc<ShaderModule>,
+	fshader: Arc<ShaderModule>,
 }
 impl Gfx {
 	pub async fn new() -> Arc<Self> {
@@ -85,21 +85,15 @@ impl Gfx {
 pub struct TriangleVertex {
 	pub pos: Vector2<f32>,
 }
-impl TriangleVertex {
-	fn binding_desc() -> vk::VertexInputBindingDescription {
-		vk::VertexInputBindingDescription::builder()
-			.binding(0)
-			.stride(size_of::<Self>() as _)
-			.input_rate(vk::VertexInputRate::VERTEX)
-			.build()
-	}
-
-	fn attribute_descs() -> [vk::VertexInputAttributeDescription; 1] {
-		[vk::VertexInputAttributeDescription::builder()
-			.binding(0)
-			.location(0)
-			.format(vk::Format::R32G32_SFLOAT)
-			.offset(offset_of!(Self, pos) as _)
-			.build()]
+impl VertexDesc for TriangleVertex {
+	fn attribute_descs() -> Vec<vk::VertexInputAttributeDescription> {
+		vec![
+			vk::VertexInputAttributeDescription::builder()
+				.binding(0)
+				.location(0)
+				.format(vk::Format::R32G32_SFLOAT)
+				.offset(offset_of!(Self, pos) as _)
+				.build(),
+		]
 	}
 }

@@ -27,6 +27,12 @@ impl CommandPool {
 			.map(move |vk| unsafe { CommandBuffer::from_vk(self.clone(), vk) })
 	}
 
+	pub fn reset(&self, release: bool) {
+		let flags =
+			if release { vk::CommandPoolResetFlags::RELEASE_RESOURCES } else { vk::CommandPoolResetFlags::empty() };
+		unsafe { self.device.vk.reset_command_pool(*self.vk.lock().unwrap(), flags) }.unwrap();
+	}
+
 	pub fn trim(&self) {
 		let mut free = self.free.lock().unwrap();
 		unsafe { self.device.vk.free_command_buffers(*self.vk.lock().unwrap(), &*free) };
@@ -45,7 +51,7 @@ impl Drop for CommandPool {
 
 pub struct CommandBuffer {
 	pub(crate) pool: Arc<CommandPool>,
-	pub(crate) inner: RwLock<CommandBufferInner>,
+	pub inner: RwLock<CommandBufferInner>,
 }
 impl CommandBuffer {
 	pub fn record(&self, cb: impl FnOnce(&mut CommandBufferRecording)) {
@@ -72,8 +78,8 @@ impl Drop for CommandBuffer {
 	}
 }
 
-pub(crate) struct CommandBufferInner {
-	pub(crate) vk: vk::CommandBuffer,
+pub struct CommandBufferInner {
+	pub vk: vk::CommandBuffer,
 	resources: Vec<Arc<dyn BufferAbstract>>,
 }
 

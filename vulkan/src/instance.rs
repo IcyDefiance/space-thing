@@ -96,7 +96,7 @@ impl Instance {
 		})
 	}
 
-	pub fn create_surface<T: HasRawWindowHandle>(self: &Arc<Self>, window: T) -> Surface<T> {
+	pub fn create_surface<T: HasRawWindowHandle>(self: &Arc<Self>, window: T) -> Arc<Surface<T>> {
 		let vk = match window.raw_window_handle() {
 			#[cfg(windows)]
 			RawWindowHandle::Windows(handle) => {

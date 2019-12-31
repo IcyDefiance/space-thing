@@ -2,12 +2,21 @@ use crate::gfx::{Gfx, TriangleVertex};
 use ash::{version::DeviceV1_0, vk, Device};
 use std::{
 	cmp::{max, min},
-	ffi::CStr,
+	iter::empty,
 	slice,
 	sync::Arc,
 	u32,
 };
-use vulkan::surface::Surface;
+use vulkan::{
+	command::{CommandBuffer, CommandPool},
+	image::{Format, Framebuffer, ImageView},
+	ordered_passes_renderpass,
+	pipeline::Pipeline,
+	render_pass::RenderPass,
+	surface::{ColorSpace, PresentMode, Surface, SurfaceCapabilities},
+	swapchain::{CompositeAlphaFlags, Swapchain},
+	Extent2D,
+};
 use winit::{
 	event_loop::EventLoop,
 	window::{Window as IWindow, WindowBuilder},
@@ -15,15 +24,15 @@ use winit::{
 
 pub struct Window {
 	pub(super) gfx: Arc<Gfx>,
-	surface: Surface<IWindow>,
+	surface: Arc<Surface<IWindow>>,
 	surface_format: vk::SurfaceFormatKHR,
-	pub(super) render_pass: vk::RenderPass,
+	pub(super) render_pass: Arc<RenderPass>,
 	frame_data: [FrameData; 2],
-	image_extent: vk::Extent2D,
-	swapchain: vk::SwapchainKHR,
-	image_views: Vec<vk::ImageView>,
-	pub(super) pipeline: vk::Pipeline,
-	pub(super) framebuffers: Vec<vk::Framebuffer>,
+	image_extent: Extent2D,
+	present_mode: PresentMode,
+	swapchain: Arc<Swapchain<IWindow>>,
+	pub(super) pipeline: Pipeline,
+	pub(super) framebuffers: Vec<Arc<Framebuffer>>,
 	frame: bool,
 	recreate_swapchain: bool,
 }
@@ -33,49 +42,40 @@ impl Window {
 		let surface = gfx.instance.create_surface(window);
 		assert!(gfx.device.physical_device().get_surface_support(gfx.queue.family(), &surface));
 
-		let surface_format = unsafe {
-			gfx.instance.khr_surface.get_physical_device_surface_formats(gfx.device.physical_device().vk, surface.vk)
-		}
-		.unwrap()
-		.into_iter()
-		.max_by_key(|format| {
-			format.format == vk::Format::B8G8R8A8_UNORM && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-		})
-		.unwrap();
+		let surface_format = gfx
+			.device
+			.physical_device()
+			.get_surface_formats(&surface)
+			.into_iter()
+			.max_by_key(|format| {
+				format.format == Format::B8G8R8A8_UNORM && format.color_space == ColorSpace::SRGB_NONLINEAR
+			})
+			.unwrap();
 
-		let attachments = [vk::AttachmentDescription::builder()
-			.format(surface_format.format)
-			.samples(vk::SampleCountFlags::TYPE_1)
-			.load_op(vk::AttachmentLoadOp::CLEAR)
-			.store_op(vk::AttachmentStoreOp::STORE)
-			.stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-			.stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-			.initial_layout(vk::ImageLayout::UNDEFINED)
-			.final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-			.build()];
-		let color_attachments =
-			[vk::AttachmentReference::builder().layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL).build()];
-		let subpasses = [vk::SubpassDescription::builder()
-			.pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-			.color_attachments(&color_attachments)
-			.build()];
-		let dependencies = [vk::SubpassDependency::builder()
-			.src_subpass(vk::SUBPASS_EXTERNAL)
-			.src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-			.dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-			.dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-			.build()];
-		let ci = vk::RenderPassCreateInfo::builder()
-			.attachments(&attachments)
-			.subpasses(&subpasses)
-			.dependencies(&dependencies);
-		let render_pass = unsafe { gfx.device.vk.create_render_pass(&ci, None) }.unwrap();
+		let render_pass = ordered_passes_renderpass!(gfx.device.clone(),
+			attachments: { color: { load: Clear, store: Store, format: surface_format.format, samples: 1, } },
+			passes: [{ color: [color], depth_stencil: {}, input: [] }]
+		);
 
 		let (caps, image_extent) = get_caps(&gfx, &surface);
+		let present_mode = gfx
+			.device
+			.physical_device()
+			.get_surface_present_modes(&surface)
+			.into_iter()
+			.min_by_key(|&mode| match mode {
+				PresentMode::MAILBOX => 0,
+				PresentMode::IMMEDIATE => 1,
+				PresentMode::FIFO_RELAXED => 2,
+				PresentMode::FIFO => 3,
+				_ => 4,
+			})
+			.unwrap();
+
 		let (swapchain, image_views) =
-			create_swapchain(&gfx, surface.vk, &caps, &surface_format, image_extent, vk::SwapchainKHR::null());
-		let pipeline = create_pipeline(&gfx, image_extent, render_pass);
-		let framebuffers = create_framebuffers(&gfx, &image_views, render_pass, image_extent);
+			create_swapchain(&gfx, surface.clone(), &caps, &surface_format, image_extent, present_mode, None);
+		let pipeline = create_pipeline(&gfx, image_extent, render_pass.clone());
+		let framebuffers = create_framebuffers(&render_pass, image_views, image_extent);
 
 		let frame_data = [FrameData::new(&gfx), FrameData::new(&gfx)];
 
@@ -86,8 +86,8 @@ impl Window {
 			render_pass,
 			frame_data,
 			image_extent,
+			present_mode,
 			swapchain,
-			image_views,
 			pipeline,
 			framebuffers,
 			frame: false,
@@ -105,7 +105,7 @@ impl Window {
 			let frame_data = &mut self.frame_data[frame];
 
 			let res = self.gfx.device.khr_swapchain.acquire_next_image(
-				self.swapchain,
+				self.swapchain.vk,
 				!0,
 				frame_data.image_available,
 				vk::Fence::null(),
@@ -129,60 +129,59 @@ impl Window {
 			self.gfx.device.vk.reset_fences(&[frame_data.frame_finished]).unwrap();
 			self.frame = !self.frame;
 
-			let framebuffer = self.framebuffers[image_uidx];
+			let framebuffer = &self.framebuffers[image_uidx];
 
-			self.gfx.device.vk.reset_command_pool(frame_data.cmdpool, vk::CommandPoolResetFlags::empty()).unwrap();
+			frame_data.cmdpool.reset(false);
 
 			// TODO: replace with real volumes
 			let volumes_len = 2;
 			if frame_data.secondaries.len() < volumes_len {
-				let ci = vk::CommandBufferAllocateInfo::builder()
-					.command_pool(frame_data.cmdpool)
-					.level(vk::CommandBufferLevel::SECONDARY)
-					.command_buffer_count((volumes_len - frame_data.secondaries.len()) as _);
-				frame_data.secondaries.extend(self.gfx.device.vk.allocate_command_buffers(&ci).unwrap());
+				let newcmds = frame_data
+					.cmdpool
+					.allocate_command_buffers(true, (volumes_len - frame_data.secondaries.len()) as _);
+				frame_data.secondaries.extend(newcmds);
 			}
-			for (_, &cmd) in (0..volumes_len).zip(&frame_data.secondaries) {
+			for (_, cmd) in (0..volumes_len).zip(&frame_data.secondaries) {
 				let flags =
 					vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT | vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE;
 				let inherit = vk::CommandBufferInheritanceInfo::builder()
-					.render_pass(self.render_pass)
+					.render_pass(self.render_pass.vk)
 					.subpass(0)
-					.framebuffer(framebuffer);
+					.framebuffer(framebuffer.vk);
 				let info = vk::CommandBufferBeginInfo::builder().flags(flags).inheritance_info(&inherit);
+				let cmd = cmd.inner.read().unwrap().vk;
 				self.gfx.device.vk.begin_command_buffer(cmd, &info).unwrap();
-				self.gfx.device.vk.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
+				self.gfx.device.vk.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.vk);
 				self.gfx.device.vk.cmd_bind_vertex_buffers(cmd, 0, &[self.gfx.triangle.vk], &[0]);
 				self.gfx.device.vk.cmd_draw(cmd, 3, 1, 0, 0);
 				self.gfx.device.vk.end_command_buffer(cmd).unwrap();
 			}
 
 			let bi = vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-			self.gfx.device.vk.begin_command_buffer(frame_data.primary, &bi).unwrap();
+			let cmd = frame_data.primary.inner.read().unwrap().vk;
+			self.gfx.device.vk.begin_command_buffer(cmd, &bi).unwrap();
 			let ci = vk::RenderPassBeginInfo::builder()
-				.render_pass(self.render_pass)
-				.framebuffer(framebuffer)
+				.render_pass(self.render_pass.vk)
+				.framebuffer(framebuffer.vk)
 				.render_area(vk::Rect2D::builder().extent(self.image_extent).build())
 				.clear_values(&[vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } }]);
-			self.gfx.device.vk.cmd_begin_render_pass(
-				frame_data.primary,
-				&ci,
-				vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
-			);
-			self.gfx.device.vk.cmd_execute_commands(frame_data.primary, &frame_data.secondaries[0..volumes_len]);
-			self.gfx.device.vk.cmd_end_render_pass(frame_data.primary);
-			self.gfx.device.vk.end_command_buffer(frame_data.primary).unwrap();
+			self.gfx.device.vk.cmd_begin_render_pass(cmd, &ci, vk::SubpassContents::SECONDARY_COMMAND_BUFFERS);
+			let secondaries: Vec<_> =
+				frame_data.secondaries[0..volumes_len].iter().map(|x| x.inner.read().unwrap().vk).collect();
+			self.gfx.device.vk.cmd_execute_commands(cmd, &secondaries);
+			self.gfx.device.vk.cmd_end_render_pass(cmd);
+			self.gfx.device.vk.end_command_buffer(cmd).unwrap();
 			let submits = [vk::SubmitInfo::builder()
 				.wait_semaphores(&[frame_data.image_available])
 				.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-				.command_buffers(&[frame_data.primary])
+				.command_buffers(&[cmd])
 				.signal_semaphores(&[frame_data.render_finished])
 				.build()];
 			self.gfx.device.vk.queue_submit(self.gfx.queue.vk, &submits, frame_data.frame_finished).unwrap();
 
 			let ci = vk::PresentInfoKHR::builder()
 				.wait_semaphores(slice::from_ref(&frame_data.render_finished))
-				.swapchains(slice::from_ref(&self.swapchain))
+				.swapchains(slice::from_ref(&self.swapchain.vk))
 				.image_indices(slice::from_ref(&image_idx));
 			match self.gfx.device.khr_swapchain.queue_present(self.gfx.queue.vk, &ci) {
 				Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => self.recreate_swapchain = true,
@@ -200,26 +199,25 @@ impl Window {
 				.wait_for_fences(&[self.frame_data[(!self.frame) as usize].frame_finished], false, !0)
 				.unwrap();
 
-			for &framebuffer in &self.framebuffers {
-				self.gfx.device.vk.destroy_framebuffer(framebuffer, None);
-			}
-			self.gfx.device.vk.destroy_pipeline(self.pipeline, None);
-			for &image_view in &self.image_views {
-				self.gfx.device.vk.destroy_image_view(image_view, None);
-			}
-
 			let (caps, image_extent) = get_caps(&self.gfx, &self.surface);
-			let (swapchain, image_views) =
-				create_swapchain(&self.gfx, self.surface.vk, &caps, &self.surface_format, image_extent, self.swapchain);
-			self.gfx.device.khr_swapchain.destroy_swapchain(self.swapchain, None);
+			let (swapchain, image_views) = create_swapchain(
+				&self.gfx,
+				self.surface.clone(),
+				&caps,
+				&self.surface_format,
+				image_extent,
+				self.present_mode,
+				Some(&self.swapchain),
+			);
 			self.swapchain = swapchain;
-			self.image_views = image_views;
 
-			self.pipeline = create_pipeline(&self.gfx, image_extent, self.render_pass);
-			self.framebuffers = create_framebuffers(&self.gfx, &self.image_views, self.render_pass, image_extent);
+			self.pipeline = create_pipeline(&self.gfx, image_extent, self.render_pass.clone());
+			self.framebuffers = create_framebuffers(&self.render_pass, image_views, image_extent);
 
 			self.image_extent = image_extent;
 		}
+
+		self.recreate_swapchain = false;
 	}
 }
 impl Drop for Window {
@@ -233,16 +231,6 @@ impl Drop for Window {
 
 			self.frame_data[0].dispose(&self.gfx.device.vk);
 			self.frame_data[1].dispose(&self.gfx.device.vk);
-
-			for &framebuffer in &self.framebuffers {
-				self.gfx.device.vk.destroy_framebuffer(framebuffer, None);
-			}
-			self.gfx.device.vk.destroy_pipeline(self.pipeline, None);
-			for &image_view in &self.image_views {
-				self.gfx.device.vk.destroy_image_view(image_view, None);
-			}
-			self.gfx.device.khr_swapchain.destroy_swapchain(self.swapchain, None);
-			self.gfx.device.vk.destroy_render_pass(self.render_pass, None);
 		}
 	}
 }
@@ -251,38 +239,25 @@ struct FrameData {
 	image_available: vk::Semaphore,
 	render_finished: vk::Semaphore,
 	frame_finished: vk::Fence,
-	cmdpool: vk::CommandPool,
-	primary: vk::CommandBuffer,
-	secondaries: Vec<vk::CommandBuffer>,
+	cmdpool: Arc<CommandPool>,
+	primary: Arc<CommandBuffer>,
+	secondaries: Vec<Arc<CommandBuffer>>,
 }
 impl FrameData {
 	fn new(gfx: &Arc<Gfx>) -> Self {
 		unsafe {
 			let image_available = gfx.device.vk.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None).unwrap();
 			let render_finished = gfx.device.vk.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None).unwrap();
-
 			let ci = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
 			let frame_finished = gfx.device.vk.create_fence(&ci, None).unwrap();
-
-			let ci = vk::CommandPoolCreateInfo::builder()
-				.flags(vk::CommandPoolCreateFlags::TRANSIENT)
-				.queue_family_index(gfx.queue.family().idx);
-			let cmdpool = gfx.device.vk.create_command_pool(&ci, None).unwrap();
-
-			let ci = vk::CommandBufferAllocateInfo::builder()
-				.command_pool(cmdpool)
-				.level(vk::CommandBufferLevel::PRIMARY)
-				.command_buffer_count(1);
-			let primary = gfx.device.vk.allocate_command_buffers(&ci).unwrap()[0];
-
+			let cmdpool = gfx.device.create_command_pool(gfx.queue.family(), true);
+			let primary = cmdpool.allocate_command_buffers(false, 1).next().unwrap();
 			Self { image_available, render_finished, frame_finished, cmdpool, primary, secondaries: vec![] }
 		}
 	}
 
 	fn dispose(&self, device: &Device) {
 		unsafe {
-			device.free_command_buffers(self.cmdpool, &[self.primary]);
-			device.destroy_command_pool(self.cmdpool, None);
 			device.destroy_fence(self.frame_finished, None);
 			device.destroy_semaphore(self.render_finished, None);
 			device.destroy_semaphore(self.image_available, None);
@@ -290,16 +265,13 @@ impl FrameData {
 	}
 }
 
-fn get_caps(gfx: &Gfx, surface: &Surface<IWindow>) -> (vk::SurfaceCapabilitiesKHR, vk::Extent2D) {
-	let caps = unsafe {
-		gfx.instance.khr_surface.get_physical_device_surface_capabilities(gfx.device.physical_device().vk, surface.vk)
-	}
-	.unwrap();
+fn get_caps(gfx: &Gfx, surface: &Surface<IWindow>) -> (SurfaceCapabilities, Extent2D) {
+	let caps = gfx.device.physical_device().get_surface_capabilities(surface);
 	let image_extent = if caps.current_extent.width != u32::MAX {
 		caps.current_extent
 	} else {
 		let (width, height) = surface.window().inner_size().to_physical(1.0).into();
-		vk::Extent2D {
+		Extent2D {
 			width: max(caps.min_image_extent.width, min(caps.max_image_extent.width, width)),
 			height: max(caps.min_image_extent.height, min(caps.max_image_extent.height, height)),
 		}
@@ -308,134 +280,70 @@ fn get_caps(gfx: &Gfx, surface: &Surface<IWindow>) -> (vk::SurfaceCapabilitiesKH
 	(caps, image_extent)
 }
 
-fn create_swapchain(
+fn create_swapchain<T: 'static>(
 	gfx: &Gfx,
-	surface: vk::SurfaceKHR,
-	caps: &vk::SurfaceCapabilitiesKHR,
+	surface: Arc<Surface<T>>,
+	caps: &SurfaceCapabilities,
 	surface_format: &vk::SurfaceFormatKHR,
-	image_extent: vk::Extent2D,
-	old_swapchain: vk::SwapchainKHR,
-) -> (vk::SwapchainKHR, std::vec::Vec<vk::ImageView>) {
-	let queue_family_indices = [gfx.queue.family().idx];
-	let present_mode = unsafe {
-		gfx.instance.khr_surface.get_physical_device_surface_present_modes(gfx.device.physical_device().vk, surface)
-	}
-	.unwrap()
-	.into_iter()
-	.min_by_key(|&mode| match mode {
-		vk::PresentModeKHR::MAILBOX => 0,
-		vk::PresentModeKHR::IMMEDIATE => 1,
-		vk::PresentModeKHR::FIFO_RELAXED => 2,
-		vk::PresentModeKHR::FIFO => 3,
-		_ => 4,
-	})
-	.unwrap();
-	let ci = vk::SwapchainCreateInfoKHR::builder()
-		.surface(surface)
-		.min_image_count(caps.min_image_count + 1)
-		.image_format(surface_format.format)
-		.image_color_space(surface_format.color_space)
-		.image_extent(image_extent)
-		.image_array_layers(1)
-		.image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
-		.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-		.queue_family_indices(&queue_family_indices)
-		.pre_transform(caps.current_transform)
-		.composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-		.present_mode(present_mode)
-		.clipped(true)
-		.old_swapchain(old_swapchain);
-	let swapchain = unsafe { gfx.device.khr_swapchain.create_swapchain(&ci, None) }.unwrap();
+	image_extent: Extent2D,
+	present_mode: PresentMode,
+	old_swapchain: Option<&Swapchain<T>>,
+) -> (Arc<Swapchain<T>>, Vec<Arc<ImageView>>) {
+	let (swapchain, images) = gfx.device.create_swapchain(
+		surface,
+		caps.min_image_count + 1,
+		surface_format.format,
+		surface_format.color_space,
+		image_extent,
+		empty(),
+		caps.current_transform,
+		CompositeAlphaFlags::OPAQUE,
+		present_mode,
+		old_swapchain,
+	);
 
-	let image_views: Vec<_> = unsafe { gfx.device.khr_swapchain.get_swapchain_images(swapchain) }
-		.unwrap()
-		.into_iter()
+	let image_views = images
 		.map(|image| {
-			let ci = vk::ImageViewCreateInfo::builder()
-				.image(image)
-				.view_type(vk::ImageViewType::TYPE_2D)
-				.format(surface_format.format)
-				.subresource_range(
-					vk::ImageSubresourceRange::builder()
-						.aspect_mask(vk::ImageAspectFlags::COLOR)
-						.level_count(1)
-						.layer_count(1)
-						.build(),
-				);
-			unsafe { gfx.device.vk.create_image_view(&ci, None) }.unwrap()
+			let range = vk::ImageSubresourceRange::builder()
+				.aspect_mask(vk::ImageAspectFlags::COLOR)
+				.level_count(1)
+				.layer_count(1)
+				.build();
+			gfx.device.create_image_view(image, surface_format.format, range)
 		})
 		.collect();
 
 	(swapchain, image_views)
 }
 
-fn create_pipeline(gfx: &Gfx, image_extent: vk::Extent2D, render_pass: vk::RenderPass) -> vk::Pipeline {
-	let stages = [
-		vk::PipelineShaderStageCreateInfo::builder()
-			.stage(vk::ShaderStageFlags::VERTEX)
-			.module(gfx.vshader.vk)
-			.name(CStr::from_bytes_with_nul(b"main\0").unwrap())
-			.build(),
-		vk::PipelineShaderStageCreateInfo::builder()
-			.stage(vk::ShaderStageFlags::FRAGMENT)
-			.module(gfx.fshader.vk)
-			.name(CStr::from_bytes_with_nul(b"main\0").unwrap())
-			.build(),
-	];
-	let vertex_binding_descriptions = [TriangleVertex::binding_desc()];
-	let vertex_attribute_descriptions = TriangleVertex::attribute_descs();
-	let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
-		.vertex_binding_descriptions(&vertex_binding_descriptions)
-		.vertex_attribute_descriptions(&vertex_attribute_descriptions);
-	let input_assembly_state =
-		vk::PipelineInputAssemblyStateCreateInfo::builder().topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-	let viewports = [vk::Viewport::builder()
-		.width(image_extent.width as _)
-		.height(image_extent.height as _)
-		.max_depth(1.0)
-		.build()];
-	let scissors = [vk::Rect2D::builder().extent(image_extent).build()];
-	let viewport_state = vk::PipelineViewportStateCreateInfo::builder().viewports(&viewports).scissors(&scissors);
-	let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
-		.polygon_mode(vk::PolygonMode::FILL)
-		.cull_mode(vk::CullModeFlags::BACK)
-		.front_face(vk::FrontFace::CLOCKWISE)
-		.line_width(1.0);
-	let multisample_state =
-		vk::PipelineMultisampleStateCreateInfo::builder().rasterization_samples(vk::SampleCountFlags::TYPE_1);
-	let attachments =
-		[vk::PipelineColorBlendAttachmentState::builder().color_write_mask(vk::ColorComponentFlags::all()).build()];
-	let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder().attachments(&attachments);
-	let cis = [vk::GraphicsPipelineCreateInfo::builder()
-		.stages(&stages)
-		.vertex_input_state(&vertex_input_state)
-		.input_assembly_state(&input_assembly_state)
-		.viewport_state(&viewport_state)
-		.rasterization_state(&rasterization_state)
-		.multisample_state(&multisample_state)
-		.color_blend_state(&color_blend_state)
-		.layout(gfx.layout.vk)
-		.render_pass(render_pass)
-		.build()];
-	unsafe { gfx.device.vk.create_graphics_pipelines(vk::PipelineCache::null(), &cis, None) }.unwrap()[0]
+fn create_pipeline(gfx: &Gfx, image_extent: Extent2D, render_pass: Arc<RenderPass>) -> Pipeline {
+	gfx.device
+		.build_pipeline(gfx.layout.clone(), render_pass)
+		.vertex_shader(gfx.vshader.clone())
+		.fragment_shader(gfx.fshader.clone())
+		.vertex_input::<TriangleVertex>()
+		.viewports(&[vk::Viewport::builder()
+			.width(image_extent.width as _)
+			.height(image_extent.height as _)
+			.max_depth(1.0)
+			.build()])
+		.build()
 }
 
 fn create_framebuffers(
-	gfx: &Gfx,
-	image_views: &[vk::ImageView],
-	render_pass: vk::RenderPass,
-	image_extent: vk::Extent2D,
-) -> Vec<vk::Framebuffer> {
+	render_pass: &Arc<RenderPass>,
+	image_views: Vec<Arc<ImageView>>,
+	image_extent: Extent2D,
+) -> Vec<Arc<Framebuffer>> {
 	image_views
-		.iter()
+		.into_iter()
 		.map(|view| {
-			let ci = vk::FramebufferCreateInfo::builder()
-				.render_pass(render_pass)
-				.attachments(slice::from_ref(view))
-				.width(image_extent.width)
-				.height(image_extent.height)
-				.layers(1);
-			unsafe { gfx.device.vk.create_framebuffer(&ci, None) }.unwrap()
+			render_pass.device().create_framebuffer(
+				render_pass.clone(),
+				vec![view],
+				image_extent.width,
+				image_extent.height,
+			)
 		})
 		.collect()
 }

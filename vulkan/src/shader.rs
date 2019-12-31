@@ -7,8 +7,8 @@ pub struct ShaderModule {
 	pub vk: vk::ShaderModule,
 }
 impl ShaderModule {
-	pub(crate) fn from_vk(device: Arc<Device>, vk: vk::ShaderModule) -> Self {
-		Self { device, vk }
+	pub(crate) fn from_vk(device: Arc<Device>, vk: vk::ShaderModule) -> Arc<Self> {
+		Arc::new(Self { device, vk })
 	}
 }
 impl Drop for ShaderModule {
