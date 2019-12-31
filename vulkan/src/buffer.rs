@@ -1,6 +1,6 @@
 use crate::{
 	command::CommandPool,
-	device::{CommandBufferExecFuture, Device, Queue},
+	device::{Device, Queue, SubmitFuture},
 };
 use ash::{version::DeviceV1_0, vk};
 use std::{marker::PhantomData, mem::size_of, slice, sync::Arc};
@@ -46,7 +46,7 @@ impl<T: 'static, CPU> BufferInit<[T], CPU> {
 		queue: &Arc<Queue>,
 		pool: &Arc<CommandPool>,
 		buffer: Arc<Buffer<[T]>>,
-	) -> (Arc<Buffer<[T]>>, CommandBufferExecFuture) {
+	) -> (Arc<Buffer<[T]>>, SubmitFuture) {
 		let cmd = pool.allocate_command_buffers(false, 1).next().unwrap();
 		cmd.record(|cmd| cmd.copy_buffer(buffer, self.buf.clone()));
 

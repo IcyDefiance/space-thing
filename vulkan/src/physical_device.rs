@@ -1,6 +1,7 @@
 use crate::{
 	device::{Device, Queue},
 	instance::Instance,
+	surface::Surface,
 };
 use ash::{version::InstanceV1_0, vk};
 use std::sync::Arc;
@@ -46,6 +47,10 @@ impl<'a> PhysicalDevice<'a> {
 			.into_iter()
 			.enumerate()
 			.map(move |(i, vk)| QueueFamilyProperties { family: QueueFamily { pdev: self, idx: i as _ }, vk })
+	}
+
+	pub fn get_surface_support<T>(&self, qfam: QueueFamily, surface: &Surface<T>) -> bool {
+		unsafe { self.instance.khr_surface.get_physical_device_surface_support(self.vk, qfam.idx, surface.vk) }
 	}
 
 	pub fn instance(&self) -> &Arc<Instance> {

@@ -71,9 +71,7 @@ impl Gfx {
 		let (triangle, future) = device
 			.create_buffer_slice(verts.len() as _, B0, BufferUsageFlags::TRANSFER_DST | BufferUsageFlags::VERTEX_BUFFER)
 			.copy_from_buffer(&mut queue, &cmdpool, triangle);
-		let mut fence = device.create_fence(false);
-		future.end(&mut fence);
-		fence.wait();
+		future.end().wait();
 
 		let vshader = unsafe { device.create_shader_module(&vert_spv.await.unwrap()) };
 		let fshader = unsafe { device.create_shader_module(&frag_spv.await.unwrap()) };

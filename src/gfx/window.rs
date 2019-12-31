@@ -1,6 +1,5 @@
 use crate::gfx::{Gfx, TriangleVertex};
 use ash::{version::DeviceV1_0, vk, Device};
-use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::{
 	cmp::{max, min},
 	ffi::CStr,
@@ -8,12 +7,15 @@ use std::{
 	sync::Arc,
 	u32,
 };
-use winit::{event_loop::EventLoop, window::WindowBuilder};
+use vulkan::surface::Surface;
+use winit::{
+	event_loop::EventLoop,
+	window::{Window as IWindow, WindowBuilder},
+};
 
 pub struct Window {
 	pub(super) gfx: Arc<Gfx>,
-	window: winit::window::Window,
-	surface: vk::SurfaceKHR,
+	surface: Surface<IWindow>,
 	surface_format: vk::SurfaceFormatKHR,
 	pub(super) render_pass: vk::RenderPass,
 	frame_data: [FrameData; 2],
@@ -28,35 +30,11 @@ pub struct Window {
 impl Window {
 	pub fn new(gfx: Arc<Gfx>, event_loop: &EventLoop<()>) -> Self {
 		let window = WindowBuilder::new().with_inner_size((1440, 810).into()).build(&event_loop).unwrap();
-
-		let surface = match window.raw_window_handle() {
-			#[cfg(windows)]
-			RawWindowHandle::Windows(handle) => {
-				let ci = vk::Win32SurfaceCreateInfoKHR::builder().hinstance(handle.hinstance).hwnd(handle.hwnd);
-				unsafe { gfx.instance.khr_win32_surface.create_win32_surface(&ci, None) }.unwrap()
-			},
-			#[cfg(unix)]
-			RawWindowHandle::Xlib(handle) => {
-				let ci = vk::XlibSurfaceCreateInfoKHR::builder().dpy(handle.display as _).window(handle.window);
-				unsafe { gfx.instance.khr_xlib_surface.create_xlib_surface(&ci, None) }.unwrap()
-			},
-			#[cfg(unix)]
-			RawWindowHandle::Wayland(handle) => {
-				let ci = vk::WaylandSurfaceCreateInfoKHR::builder().display(handle.display).surface(handle.surface);
-				unsafe { gfx.instance.khr_wayland_surface.create_wayland_surface(&ci, None) }.unwrap()
-			},
-			_ => unimplemented!(),
-		};
-		assert!(unsafe {
-			gfx.instance.khr_surface.get_physical_device_surface_support(
-				gfx.device.physical_device().vk,
-				gfx.queue.family().idx,
-				surface,
-			)
-		});
+		let surface = gfx.instance.create_surface(window);
+		assert!(gfx.device.physical_device().get_surface_support(gfx.queue.family(), &surface));
 
 		let surface_format = unsafe {
-			gfx.instance.khr_surface.get_physical_device_surface_formats(gfx.device.physical_device().vk, surface)
+			gfx.instance.khr_surface.get_physical_device_surface_formats(gfx.device.physical_device().vk, surface.vk)
 		}
 		.unwrap()
 		.into_iter()
@@ -93,9 +71,9 @@ impl Window {
 			.dependencies(&dependencies);
 		let render_pass = unsafe { gfx.device.vk.create_render_pass(&ci, None) }.unwrap();
 
-		let (caps, image_extent) = get_caps(&gfx, surface, &window);
+		let (caps, image_extent) = get_caps(&gfx, &surface);
 		let (swapchain, image_views) =
-			create_swapchain(&gfx, surface, &caps, &surface_format, image_extent, vk::SwapchainKHR::null());
+			create_swapchain(&gfx, surface.vk, &caps, &surface_format, image_extent, vk::SwapchainKHR::null());
 		let pipeline = create_pipeline(&gfx, image_extent, render_pass);
 		let framebuffers = create_framebuffers(&gfx, &image_views, render_pass, image_extent);
 
@@ -103,7 +81,6 @@ impl Window {
 
 		Self {
 			gfx,
-			window,
 			surface,
 			surface_format,
 			render_pass,
@@ -231,9 +208,9 @@ impl Window {
 				self.gfx.device.vk.destroy_image_view(image_view, None);
 			}
 
-			let (caps, image_extent) = get_caps(&self.gfx, self.surface, &self.window);
+			let (caps, image_extent) = get_caps(&self.gfx, &self.surface);
 			let (swapchain, image_views) =
-				create_swapchain(&self.gfx, self.surface, &caps, &self.surface_format, image_extent, self.swapchain);
+				create_swapchain(&self.gfx, self.surface.vk, &caps, &self.surface_format, image_extent, self.swapchain);
 			self.gfx.device.khr_swapchain.destroy_swapchain(self.swapchain, None);
 			self.swapchain = swapchain;
 			self.image_views = image_views;
@@ -266,7 +243,6 @@ impl Drop for Window {
 			}
 			self.gfx.device.khr_swapchain.destroy_swapchain(self.swapchain, None);
 			self.gfx.device.vk.destroy_render_pass(self.render_pass, None);
-			self.gfx.instance.khr_surface.destroy_surface(self.surface, None);
 		}
 	}
 }
@@ -314,19 +290,15 @@ impl FrameData {
 	}
 }
 
-fn get_caps(
-	gfx: &Gfx,
-	surface: vk::SurfaceKHR,
-	window: &winit::window::Window,
-) -> (vk::SurfaceCapabilitiesKHR, vk::Extent2D) {
+fn get_caps(gfx: &Gfx, surface: &Surface<IWindow>) -> (vk::SurfaceCapabilitiesKHR, vk::Extent2D) {
 	let caps = unsafe {
-		gfx.instance.khr_surface.get_physical_device_surface_capabilities(gfx.device.physical_device().vk, surface)
+		gfx.instance.khr_surface.get_physical_device_surface_capabilities(gfx.device.physical_device().vk, surface.vk)
 	}
 	.unwrap();
 	let image_extent = if caps.current_extent.width != u32::MAX {
 		caps.current_extent
 	} else {
-		let (width, height) = window.inner_size().to_physical(1.0).into();
+		let (width, height) = surface.window().inner_size().to_physical(1.0).into();
 		vk::Extent2D {
 			width: max(caps.min_image_extent.width, min(caps.max_image_extent.width, width)),
 			height: max(caps.min_image_extent.height, min(caps.max_image_extent.height, height)),

@@ -9,5 +9,6 @@ edition = "2018"
 [dependencies]
 ash = "0.29.0"
 log = "0.4.8"
+raw-window-handle = "0.3.3"
 typenum = "1.11.2"
 vk-mem = "0.2.0"

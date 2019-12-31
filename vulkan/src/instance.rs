@@ -1,9 +1,10 @@
-use crate::{physical_device::PhysicalDevice, Vulkan};
+use crate::{physical_device::PhysicalDevice, surface::Surface, Vulkan};
 use ash::{
 	extensions::{ext, khr},
 	version::{EntryV1_0, InstanceV1_0},
 	vk, vk_make_version, Instance as VkInstance,
 };
+use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::{
 	collections::HashSet,
 	ffi::{c_void, CStr},
@@ -93,6 +94,29 @@ impl Instance {
 			#[cfg(debug_assertions)]
 			debug_messenger,
 		})
+	}
+
+	pub fn create_surface<T: HasRawWindowHandle>(self: &Arc<Self>, window: T) -> Surface<T> {
+		let vk = match window.raw_window_handle() {
+			#[cfg(windows)]
+			RawWindowHandle::Windows(handle) => {
+				let ci = vk::Win32SurfaceCreateInfoKHR::builder().hinstance(handle.hinstance).hwnd(handle.hwnd);
+				unsafe { self.khr_win32_surface.create_win32_surface(&ci, None) }.unwrap()
+			},
+			#[cfg(unix)]
+			RawWindowHandle::Xlib(handle) => {
+				let ci = vk::XlibSurfaceCreateInfoKHR::builder().dpy(handle.display as _).window(handle.window);
+				unsafe { self.khr_xlib_surface.create_xlib_surface(&ci, None) }.unwrap()
+			},
+			#[cfg(unix)]
+			RawWindowHandle::Wayland(handle) => {
+				let ci = vk::WaylandSurfaceCreateInfoKHR::builder().display(handle.display).surface(handle.surface);
+				unsafe { self.khr_wayland_surface.create_wayland_surface(&ci, None) }.unwrap()
+			},
+			_ => unimplemented!(),
+		};
+
+		unsafe { Surface::from_vk(self.clone(), window, vk) }
 	}
 
 	pub fn enumerate_physical_devices<'a>(self: &'a Arc<Instance>) -> impl Iterator<Item = PhysicalDevice<'a>> {

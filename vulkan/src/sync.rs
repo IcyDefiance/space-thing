@@ -13,8 +13,8 @@ impl Fence {
 		self.resources.lock().unwrap().clear();
 	}
 
-	pub(crate) unsafe fn from_vk(device: Arc<Device>, vk: vk::Fence) -> Self {
-		Self { device, vk, resources: Mutex::default() }
+	pub(crate) unsafe fn from_vk(device: Arc<Device>, vk: vk::Fence, resources: Vec<Arc<CommandBuffer>>) -> Self {
+		Self { device, vk, resources: Mutex::new(resources) }
 	}
 }
 impl Drop for Fence {

@@ -53,7 +53,7 @@ impl Device {
 		}
 	}
 
-	pub fn create_fence(self: &Arc<Device>, signalled: bool) -> Fence {
+	pub(crate) fn create_fence(self: &Arc<Device>, signalled: bool, resources: Vec<Arc<CommandBuffer>>) -> Fence {
 		unsafe {
 			let mut flags = vk::FenceCreateFlags::empty();
 			if signalled {
@@ -61,7 +61,7 @@ impl Device {
 			}
 
 			let vk = self.vk.create_fence(&vk::FenceCreateInfo::builder().flags(flags), None).unwrap();
-			Fence::from_vk(self.clone(), vk)
+			Fence::from_vk(self.clone(), vk, resources)
 		}
 	}
 
@@ -122,26 +122,25 @@ impl Queue {
 		QueueFamily::from_vk(self.device.physical_device(), self.family)
 	}
 
-	pub fn submit(self: &Arc<Self>, cmd: Arc<CommandBuffer>) -> CommandBufferExecFuture {
+	pub fn submit(self: &Arc<Self>, cmd: Arc<CommandBuffer>) -> SubmitFuture {
 		assert!(cmd.pool.queue_family == self.family);
 
-		CommandBufferExecFuture { queue: self.clone(), cmd }
+		SubmitFuture { queue: self.clone(), cmd }
 	}
 }
 
-pub struct CommandBufferExecFuture {
+pub struct SubmitFuture {
 	queue: Arc<Queue>,
 	cmd: Arc<CommandBuffer>,
 }
-impl CommandBufferExecFuture {
-	pub fn end(self, fence: &mut Fence) {
-		{
-			let cmd_inner = self.cmd.inner.read().unwrap();
+impl SubmitFuture {
+	pub fn end(self) -> Fence {
+		let fence = self.queue.device.create_fence(false, vec![self.cmd.clone()]);
 
-			let submits = [vk::SubmitInfo::builder().command_buffers(&[cmd_inner.vk]).build()];
-			unsafe { self.queue.device().vk.queue_submit(self.queue.vk, &submits, fence.vk) }.unwrap();
-		}
+		let cmd_inner = self.cmd.inner.read().unwrap();
+		let submits = [vk::SubmitInfo::builder().command_buffers(&[cmd_inner.vk]).build()];
+		unsafe { self.queue.device().vk.queue_submit(self.queue.vk, &submits, fence.vk) }.unwrap();
 
-		*fence.resources.lock().unwrap() = vec![self.cmd];
+		fence
 	}
 }
