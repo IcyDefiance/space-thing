@@ -1,5 +1,6 @@
-use crate::{image::ImageAbstract, pipeline::PipelineBuilder, render_pass::RenderPass};
+use crate::{image::ImageAbstract, pipeline::PipelineBuilder, render_pass::RenderPass, sync::GpuFuture};
 pub use ash::vk::BufferUsageFlags;
+use typenum::B0;
 
 use crate::{
 	buffer::BufferInit,
@@ -11,7 +12,7 @@ use crate::{
 	shader::ShaderModule,
 	surface::{ColorSpace, PresentMode, Surface, SurfaceTransformFlags},
 	swapchain::{CompositeAlphaFlags, Swapchain, SwapchainImage},
-	sync::Fence,
+	sync::{Fence, Resource, Semaphore},
 	Extent2D,
 };
 use ash::{extensions::khr, version::DeviceV1_0, vk, Device as VkDevice};
@@ -54,18 +55,10 @@ impl Device {
 	}
 
 	pub fn create_command_pool<'a>(self: &Arc<Self>, family: QueueFamily<'a>, transient: bool) -> Arc<CommandPool> {
-		let mut flags = vk::CommandPoolCreateFlags::empty();
-		if transient {
-			flags |= vk::CommandPoolCreateFlags::TRANSIENT;
-		};
-
-		let ci = vk::CommandPoolCreateInfo::builder().flags(flags).queue_family_index(family.idx);
-
-		let vk = unsafe { self.vk.create_command_pool(&ci, None) }.unwrap();
-		unsafe { CommandPool::from_vk(self.clone(), family.idx, vk) }
+		unsafe { CommandPool::from_vk(self.clone(), family.idx, transient) }
 	}
 
-	pub(crate) fn create_fence(self: &Arc<Self>, signalled: bool, resources: Vec<Arc<CommandBuffer>>) -> Fence {
+	pub(crate) fn create_fence(self: &Arc<Self>, signalled: bool, resources: Vec<Arc<CommandBuffer<B0>>>) -> Fence {
 		unsafe {
 			let mut flags = vk::FenceCreateFlags::empty();
 			if signalled {
@@ -74,6 +67,13 @@ impl Device {
 
 			let vk = self.vk.create_fence(&vk::FenceCreateInfo::builder().flags(flags), None).unwrap();
 			Fence::from_vk(self.clone(), vk, resources)
+		}
+	}
+
+	pub(crate) fn create_semaphore(self: &Arc<Self>) -> Arc<Semaphore> {
+		unsafe {
+			let vk = self.vk.create_semaphore(&vk::SemaphoreCreateInfo::builder(), None).unwrap();
+			Semaphore::from_vk(self.clone(), vk)
 		}
 	}
 
@@ -161,13 +161,12 @@ impl Device {
 			.clipped(true)
 			.old_swapchain(old_swapchain.map(|x| x.vk).unwrap_or(vk::SwapchainKHR::null()));
 		let vk = unsafe { self.khr_swapchain.create_swapchain(&ci, None) }.unwrap();
-		let swapchain = unsafe { Swapchain::from_vk(self.clone(), surface, vk) };
+		let images = unsafe { self.khr_swapchain.get_swapchain_images(vk) }.unwrap();
+
+		let swapchain = unsafe { Swapchain::from_vk(self.clone(), surface, vk, images.len()) };
 
 		let swapchain2 = swapchain.clone();
-		let images = unsafe { self.khr_swapchain.get_swapchain_images(swapchain.vk) }
-			.unwrap()
-			.into_iter()
-			.map(move |vk| unsafe { SwapchainImage::from_vk(swapchain2.clone(), vk) });
+		let images = images.into_iter().map(move |vk| unsafe { SwapchainImage::from_vk(swapchain2.clone(), vk) });
 
 		(swapchain, images)
 	}
@@ -204,7 +203,7 @@ impl Drop for Device {
 }
 
 pub struct Queue {
-	device: Arc<Device>,
+	pub(crate) device: Arc<Device>,
 	family: u32,
 	pub vk: vk::Queue,
 }
@@ -217,25 +216,89 @@ impl Queue {
 		QueueFamily::from_vk(self.device.physical_device(), self.family)
 	}
 
-	pub fn submit(self: &Arc<Self>, cmd: Arc<CommandBuffer>) -> SubmitFuture {
+	pub fn submit(self: &Arc<Self>, cmd: Arc<CommandBuffer<B0>>) -> SubmitFuture {
 		assert!(cmd.pool.queue_family == self.family);
-
 		SubmitFuture { queue: self.clone(), cmd }
+	}
+
+	pub fn submit_after<T: GpuFuture>(self: &Arc<Self>, prev: T, cmd: Arc<CommandBuffer<B0>>) -> SubmitAfterFuture<T> {
+		assert!(cmd.pool.queue_family == self.family);
+		SubmitAfterFuture { queue: self.clone(), cmd, prev }
 	}
 }
 
 pub struct SubmitFuture {
 	queue: Arc<Queue>,
-	cmd: Arc<CommandBuffer>,
+	cmd: Arc<CommandBuffer<B0>>,
 }
 impl SubmitFuture {
 	pub fn end(self) -> Fence {
 		let fence = self.queue.device.create_fence(false, vec![self.cmd.clone()]);
 
-		let cmd_inner = self.cmd.inner.read().unwrap();
-		let submits = [vk::SubmitInfo::builder().command_buffers(&[cmd_inner.vk]).build()];
+		let submits = [vk::SubmitInfo::builder().command_buffers(&[self.cmd.vk]).build()];
 		unsafe { self.queue.device().vk.queue_submit(self.queue.vk, &submits, fence.vk) }.unwrap();
 
 		fence
+	}
+}
+
+pub struct SubmitAfterFuture<T: GpuFuture> {
+	queue: Arc<Queue>,
+	cmd: Arc<CommandBuffer<B0>>,
+	prev: T,
+}
+impl<T: GpuFuture> SubmitAfterFuture<T> {
+	pub fn end(self) -> Fence {
+		let (semaphores, stages) = self.prev.semaphores();
+		let mut resources = Vec::with_capacity(semaphores.len() + 1);
+		let mut semaphore_vks = Vec::with_capacity(semaphores.len());
+		for semaphore in semaphores {
+			semaphore_vks.push(semaphore.vk);
+			resources.push(Resource::Semaphore(semaphore));
+		}
+
+		let fence = self.queue.device.create_fence(false, vec![self.cmd.clone()]);
+
+		let submits = [vk::SubmitInfo::builder()
+			.wait_semaphores(&semaphore_vks)
+			.wait_dst_stage_mask(&stages)
+			.command_buffers(&[self.cmd.vk])
+			.build()];
+		unsafe { self.queue.device().vk.queue_submit(self.queue.vk, &submits, fence.vk) }.unwrap();
+
+		fence
+	}
+
+	pub fn flush(self) -> (Fence, FlushFuture) {
+		let (semaphores, stages) = self.prev.semaphores();
+		let mut resources = Vec::with_capacity(semaphores.len() + 1);
+		let mut semaphore_vks = Vec::with_capacity(semaphores.len());
+		for semaphore in semaphores {
+			semaphore_vks.push(semaphore.vk);
+			resources.push(Resource::Semaphore(semaphore));
+		}
+
+		let fence = self.queue.device.create_fence(false, vec![self.cmd.clone()]);
+		let semaphore = self.queue.device.create_semaphore();
+
+		let submits = [vk::SubmitInfo::builder()
+			.wait_semaphores(&semaphore_vks)
+			.wait_dst_stage_mask(&stages)
+			.command_buffers(&[self.cmd.vk])
+			.signal_semaphores(&[semaphore.vk])
+			.build()];
+		unsafe { self.queue.device().vk.queue_submit(self.queue.vk, &submits, fence.vk) }.unwrap();
+
+		(fence, FlushFuture { semaphore })
+	}
+}
+
+pub struct FlushFuture {
+	semaphore: Arc<Semaphore>,
+}
+impl GpuFuture for FlushFuture {
+	fn semaphores(self) -> (Vec<Arc<Semaphore>>, Vec<vk::PipelineStageFlags>) {
+		// TODO: figure out what stages to block
+		(vec![self.semaphore], vec![vk::PipelineStageFlags::BOTTOM_OF_PIPE])
 	}
 }

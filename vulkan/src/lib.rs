@@ -12,7 +12,7 @@ pub mod swapchain;
 pub mod sync;
 
 pub use ash::{
-	vk::{Extent2D, Offset2D},
+	vk::{Extent2D, Offset2D, Rect2D},
 	LoadingError,
 };
 

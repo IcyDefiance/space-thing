@@ -29,7 +29,11 @@ impl<T: ?Sized> Drop for Buffer<T> {
 		self.device.allocator.free_memory(&self.alloc).unwrap();
 	}
 }
-impl<T: ?Sized> BufferAbstract for Buffer<T> {}
+impl<T: ?Sized> BufferAbstract for Buffer<T> {
+	fn vk(&self) -> vk::Buffer {
+		self.vk
+	}
+}
 
 pub struct BufferInit<T: ?Sized, CPU> {
 	buf: Arc<Buffer<T>>,
@@ -47,9 +51,7 @@ impl<T: 'static, CPU> BufferInit<[T], CPU> {
 		pool: &Arc<CommandPool>,
 		buffer: Arc<Buffer<[T]>>,
 	) -> (Arc<Buffer<[T]>>, SubmitFuture) {
-		let cmd = pool.allocate_command_buffers(false, 1).next().unwrap();
-		cmd.record(|cmd| cmd.copy_buffer(buffer, self.buf.clone()));
-
+		let cmd = pool.record(true, false).copy_buffer(buffer, self.buf.clone()).build();
 		let future = queue.submit(cmd);
 		(self.buf, future)
 	}
@@ -69,4 +71,6 @@ impl<T: Copy + 'static> BufferInit<[T], B1> {
 	}
 }
 
-pub(crate) trait BufferAbstract {}
+pub trait BufferAbstract {
+	fn vk(&self) -> vk::Buffer;
+}

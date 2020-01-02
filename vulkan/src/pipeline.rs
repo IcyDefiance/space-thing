@@ -48,7 +48,7 @@ pub struct PipelineBuilder<'a, T: VertexDesc> {
 	viewports: &'a [Viewport],
 }
 impl<'a, T: VertexDesc> PipelineBuilder<'a, T> {
-	pub fn build(self) -> Pipeline {
+	pub fn build(self) -> Arc<Pipeline> {
 		let mut stages = vec![
 			vk::PipelineShaderStageCreateInfo::builder()
 				.stage(vk::ShaderStageFlags::VERTEX)
@@ -112,14 +112,14 @@ impl<'a, T: VertexDesc> PipelineBuilder<'a, T> {
 			.build()];
 		let vk = unsafe { self.device.vk.create_graphics_pipelines(vk::PipelineCache::null(), &cis, None) }.unwrap()[0];
 
-		Pipeline {
+		Arc::new(Pipeline {
 			device: self.device,
 			_layout: self.layout,
 			_render_pass: self.render_pass,
 			_vertex_shader: self.vertex_shader.unwrap(),
 			_fragment_shader: self.fragment_shader.unwrap(),
 			vk,
-		}
+		})
 	}
 
 	pub fn vertex_shader(mut self, vertex_shader: Arc<ShaderModule>) -> Self {
