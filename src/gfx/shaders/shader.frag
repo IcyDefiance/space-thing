@@ -7,15 +7,17 @@ layout(location = 0) out vec4 out_color;
 layout(binding = 0) uniform sampler smpl;
 layout(binding = 1) uniform texture3D voxels[2];
 
+const vec2 iResolution = vec2(1440.0, 810.0); // FIXME // FIXME-even-more: make it a uniform don't just update it manually ;_;
+
 const vec2 AOSize = vec2(3.14159, 2.0 * 3.14159 * 3.14159);
 const float ViewDistance = 1000.0;
-const vec3 AmbientLight = vec3(0.25, 0.5, 0.75);
+const vec3 AmbientLight = vec3(0.5, 0.5, 0.5);
 const float MinStepSize = 0.01;
 const float GridSize = 1.0;
 const float tiny = 0.001;
 
 const vec4 cam_proj = vec4(0.5625, 1.0, -1.002002, -1.001001);
-const vec3 cam_pos = vec3(0.0, 1.618, 4.0);
+const vec3 cam_pos = vec3(0.0, -4.0, 1.618);
 const vec4 cam_rot = vec4(0.0, 0.0, 0.0, 1.0);
 
 vec3 quat_mul(vec4 quat, vec3 vec) {
@@ -28,18 +30,19 @@ float sdBox(vec3 p, vec3 b) {
 }
 
 float F(vec3 pos) {
-	return texture(sampler3D(voxels[0], smpl), pos).r;
-	// float d = dot(pos, vec3(0.0, 1.0, 0.0));
-	// for(int i=0;i<5;i++) {
-	// 	vec3 boxPos = vec3(0.0, float(2*i) + 0.5, 0.0);
-	// 	float v = sdBox(pos - boxPos, vec3(0.5));
-	// 	d = min(d, v);
-	// }
-	// return d;
+	//vec3 tc = pos / vec3(16.0, 16.0, 256.0);
+	//return texture(sampler3D(voxels[0], smpl), tc).r;
+	float d = pos.z;
+	for(int i=0;i<5;i++) {
+		vec3 boxPos = vec3(0.0, 0.0, float(2*i) + 0.5);
+		float v = sdBox(pos - boxPos, vec3(0.5));
+		d = min(d, v);
+	}
+	return d;
 }
 
 float shadowRay(vec3 pos, vec3 dir) {
-	const float sharpness = 4.0;
+	const float sharpness = 8.0;
 	float s = 1.0;
 	float t = 0.5 * GridSize;
 	for(int i=0;i<64;i++) {
@@ -102,8 +105,10 @@ float ao(vec3 p, vec3 n) {
 #endif
 
 void main() {
-	const vec2 iResolution = vec2(1440.0, 810.0); // FIXME
-	vec3 dir = quat_mul(cam_rot, normalize(vec3((2.0*gl_FragCoord.xy-iResolution.xy)/iResolution.y, -1.0)));
+	vec3 dir = quat_mul(cam_rot, normalize(vec3(
+		(2.0*gl_FragCoord.x - iResolution.x) / iResolution.y,
+		1.0,
+		1.0 - 2.0*gl_FragCoord.y/iResolution.y)));
 	vec3 pos = cam_pos;
 	float t = tiny;
 	for(int i=0;i<128;i++) {
@@ -125,16 +130,15 @@ void main() {
 		if (abs(d) < tiny) break;
 	}
 
-	const vec2 k = vec2(1.0, -1.0);
-	vec3 nor = normalize(k.xyy*F(pos + k.xyy*tiny) + k.yyx*F(pos + k.yyx*tiny) + k.yxy*F(pos + k.yxy*tiny) + k.xxx*F(pos + k.xxx*tiny));
+	const vec2 k = vec2(tiny, -tiny);
+	vec3 nor = normalize(k.xyy*F(pos + k.xyy) + k.yyx*F(pos + k.yyx) + k.yxy*F(pos + k.yxy) + k.xxx*F(pos + k.xxx));
 
 	// add texturing here
 	vec3 color = vec3(0.5);
 
 	vec3 light = AmbientLight * ao(pos, nor);
-
 	// *** add lights here ***
-	vec3 lightDir1 = normalize(vec3(5.0, 4.0, 3.0));
+	vec3 lightDir1 = normalize(vec3(3.0, -4.0, 5.0));
 	light += vec3(1.0, 1.0, 1.0) * max(0.0, dot(nor, lightDir1)) * shadowRay(pos, lightDir1);
 	//vec3 lightDir2 = normalize(vec3(-5.0, 15.0, 2.0));
 	//light += vec3(1.0, 0.9, 0.8) * max(0.0, dot(nor, lightDir2)) * shadowRay(pos, lightDir2);
