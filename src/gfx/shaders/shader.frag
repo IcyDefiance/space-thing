@@ -4,6 +4,9 @@ layout(location = 0) in vec2 in_pos;
 
 layout(location = 0) out vec4 out_color;
 
+layout(binding = 0) uniform sampler2D voxels;
+layout(binding = 1) uniform sampler2D mats;
+
 vec4 cam_proj = vec4(0.5625, 1, -1.002002, -1.001001);
 vec3 cam_pos = vec3(0, -5, 0);
 vec4 cam_rot = vec4(0, 0, 0, 1);

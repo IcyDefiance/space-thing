@@ -1,5 +1,7 @@
 pub mod buffer;
+pub mod image;
 pub mod window;
+pub mod world;
 
 use crate::fs::read_bytes;
 #[cfg(debug_assertions)]
@@ -44,10 +46,12 @@ pub struct Gfx {
 	queue: vk::Queue,
 	cmdpool: vk::CommandPool,
 	cmdpool_transient: vk::CommandPool,
-	layout: vk::PipelineLayout,
+	desc_layout: vk::DescriptorSetLayout,
+	pipeline_layout: vk::PipelineLayout,
 	allocator: Allocator,
 	triangle: vk::Buffer,
 	triangle_alloc: Allocation,
+	sampler: vk::Sampler,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
 }
@@ -136,8 +140,26 @@ impl Gfx {
 		let ci = ci.flags(vk::CommandPoolCreateFlags::TRANSIENT);
 		let cmdpool_transient = unsafe { device.create_command_pool(&ci, None) }.unwrap();
 
-		let ci = vk::PipelineLayoutCreateInfo::builder();
-		let layout = unsafe { device.create_pipeline_layout(&ci, None) }.unwrap();
+		let ci = vk::SamplerCreateInfo::builder()
+			.mag_filter(vk::Filter::LINEAR)
+			.min_filter(vk::Filter::LINEAR)
+			.address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+			.address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+			.address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+		let sampler = unsafe { device.create_sampler(&ci, None) }.unwrap();
+
+		let bindings = [vk::DescriptorSetLayoutBinding::builder()
+			.binding(0)
+			.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+			.stage_flags(vk::ShaderStageFlags::FRAGMENT)
+			.immutable_samplers(&[sampler, sampler])
+			.build()];
+		let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
+		let desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
+
+		let desc_layouts = [desc_layout];
+		let ci = vk::PipelineLayoutCreateInfo::builder().set_layouts(&desc_layouts);
+		let pipeline_layout = unsafe { device.create_pipeline_layout(&ci, None) }.unwrap();
 
 		let ci = AllocatorCreateInfo {
 			physical_device,
@@ -184,10 +206,12 @@ impl Gfx {
 			queue,
 			cmdpool,
 			cmdpool_transient,
-			layout,
+			desc_layout,
+			pipeline_layout,
 			allocator,
 			triangle,
 			triangle_alloc,
+			sampler,
 			vshader,
 			fshader,
 		})
@@ -201,7 +225,9 @@ impl Drop for Gfx {
 			self.device.destroy_buffer(self.triangle, None);
 			self.allocator.free_memory(&self.triangle_alloc).unwrap();
 			self.allocator.destroy();
-			self.device.destroy_pipeline_layout(self.layout, None);
+			self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+			self.device.destroy_descriptor_set_layout(self.desc_layout, None);
+			self.device.destroy_sampler(self.sampler, None);
 			self.device.destroy_command_pool(self.cmdpool_transient, None);
 			self.device.destroy_command_pool(self.cmdpool, None);
 			self.device.destroy_device(None);

@@ -3,7 +3,7 @@ mod gfx;
 mod threads;
 
 use futures::executor::block_on;
-use gfx::{window::Window, Gfx};
+use gfx::{window::Window, world::World, Gfx};
 use simplelog::{LevelFilter, SimpleLogger};
 use winit::{
 	event::{Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -18,9 +18,10 @@ async fn amain() {
 	SimpleLogger::init(LevelFilter::Warn, Default::default()).unwrap();
 
 	let gfx = Gfx::new().await;
+	let world = World::new(gfx.clone());
 
 	let event_loop = EventLoop::new();
-	let mut window = Window::new(gfx.clone(), &event_loop);
+	let mut window = Window::new(gfx, &event_loop);
 
 	event_loop.run(move |event, _window, control| {
 		*control = ControlFlow::Poll;
@@ -36,7 +37,7 @@ async fn amain() {
 				},
 				_ => (),
 			},
-			Event::EventsCleared => window.draw(),
+			Event::EventsCleared => window.draw(&world),
 			_ => (),
 		};
 	});

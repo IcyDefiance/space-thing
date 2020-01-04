@@ -1,4 +1,4 @@
-use crate::gfx::{Gfx, TriangleVertex};
+use crate::gfx::{world::World, Gfx, TriangleVertex};
 use ash::{version::DeviceV1_0, vk, Device};
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::{
@@ -16,12 +16,14 @@ pub struct Window {
 	surface: vk::SurfaceKHR,
 	surface_format: vk::SurfaceFormatKHR,
 	pub(super) render_pass: vk::RenderPass,
-	frame_data: [FrameData; 2],
 	image_extent: vk::Extent2D,
 	swapchain: vk::SwapchainKHR,
 	image_views: Vec<vk::ImageView>,
 	pub(super) pipeline: vk::Pipeline,
 	pub(super) framebuffers: Vec<vk::Framebuffer>,
+	desc_pool: vk::DescriptorPool,
+	desc_sets: Vec<vk::DescriptorSet>,
+	frame_data: [FrameData; 2],
 	frame: bool,
 	recreate_swapchain: bool,
 }
@@ -95,6 +97,8 @@ impl Window {
 		let pipeline = create_pipeline(&gfx, image_extent, render_pass);
 		let framebuffers = create_framebuffers(&gfx, &image_views, render_pass, image_extent);
 
+		let (desc_pool, desc_sets) = create_desc_pool(&gfx, image_views.len() as _);
+
 		let frame_data = [FrameData::new(&gfx), FrameData::new(&gfx)];
 
 		Self {
@@ -103,18 +107,20 @@ impl Window {
 			surface,
 			surface_format,
 			render_pass,
-			frame_data,
 			image_extent,
 			swapchain,
 			image_views,
 			pipeline,
 			framebuffers,
+			desc_pool,
+			desc_sets,
+			frame_data,
 			frame: false,
 			recreate_swapchain: false,
 		}
 	}
 
-	pub fn draw(&mut self) {
+	pub fn draw(&mut self, world: &World) {
 		unsafe {
 			if self.recreate_swapchain {
 				self.recreate_swapchain();
@@ -152,8 +158,29 @@ impl Window {
 
 			self.gfx.device.reset_command_pool(frame_data.cmdpool, vk::CommandPoolResetFlags::empty()).unwrap();
 
+			let desc_set = self.desc_sets[image_uidx];
+
+			let image_info = [
+				vk::DescriptorImageInfo::builder()
+					.sampler(self.gfx.sampler)
+					.image_view(world.voxels_view)
+					.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+					.build(),
+				vk::DescriptorImageInfo::builder()
+					.sampler(self.gfx.sampler)
+					.image_view(world.mats_view)
+					.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+					.build(),
+			];
+			let write = vk::WriteDescriptorSet::builder()
+				.dst_set(desc_set)
+				.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+				.image_info(&image_info)
+				.build();
+			self.gfx.device.update_descriptor_sets(&[write], &[]);
+
 			// TODO: replace with real volumes
-			let volumes_len = 2;
+			let volumes_len = 1;
 			if frame_data.secondaries.len() < volumes_len {
 				let ci = vk::CommandBufferAllocateInfo::builder()
 					.command_pool(frame_data.cmdpool)
@@ -172,6 +199,14 @@ impl Window {
 				self.gfx.device.begin_command_buffer(cmd, &info).unwrap();
 				self.gfx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
 				self.gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[self.gfx.triangle], &[0]);
+				self.gfx.device.cmd_bind_descriptor_sets(
+					cmd,
+					vk::PipelineBindPoint::GRAPHICS,
+					self.gfx.pipeline_layout,
+					0,
+					&[desc_set],
+					&[],
+				);
 				self.gfx.device.cmd_draw(cmd, 3, 1, 0, 0);
 				self.gfx.device.end_command_buffer(cmd).unwrap();
 			}
@@ -230,6 +265,14 @@ impl Window {
 			let (swapchain, image_views) =
 				create_swapchain(&self.gfx, self.surface, &caps, &self.surface_format, image_extent, self.swapchain);
 			self.gfx.khr_swapchain.destroy_swapchain(self.swapchain, None);
+
+			if image_views.len() != self.image_views.len() {
+				self.gfx.device.destroy_descriptor_pool(self.desc_pool, None);
+				let (desc_pool, desc_sets) = create_desc_pool(&self.gfx, image_views.len() as _);
+				self.desc_pool = desc_pool;
+				self.desc_sets = desc_sets;
+			}
+
 			self.swapchain = swapchain;
 			self.image_views = image_views;
 
@@ -251,6 +294,7 @@ impl Drop for Window {
 			self.frame_data[0].dispose(&self.gfx.device);
 			self.frame_data[1].dispose(&self.gfx.device);
 
+			self.gfx.device.destroy_descriptor_pool(self.desc_pool, None);
 			for &framebuffer in &self.framebuffers {
 				self.gfx.device.destroy_framebuffer(framebuffer, None);
 			}
@@ -433,7 +477,7 @@ fn create_pipeline(gfx: &Gfx, image_extent: vk::Extent2D, render_pass: vk::Rende
 		.rasterization_state(&rasterization_state)
 		.multisample_state(&multisample_state)
 		.color_blend_state(&color_blend_state)
-		.layout(gfx.layout)
+		.layout(gfx.pipeline_layout)
 		.render_pass(render_pass)
 		.build()];
 	unsafe { gfx.device.create_graphics_pipelines(vk::PipelineCache::null(), &cis, None) }.unwrap()[0]
@@ -457,4 +501,19 @@ fn create_framebuffers(
 			unsafe { gfx.device.create_framebuffer(&ci, None) }.unwrap()
 		})
 		.collect()
+}
+
+fn create_desc_pool(gfx: &Gfx, max_sets: u32) -> (vk::DescriptorPool, Vec<vk::DescriptorSet>) {
+	let pool_sizes = [vk::DescriptorPoolSize::builder()
+		.ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+		.descriptor_count(max_sets * 2)
+		.build()];
+	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(max_sets).pool_sizes(&pool_sizes);
+	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
+
+	let set_layouts = vec![gfx.desc_layout; max_sets as _];
+	let ci = vk::DescriptorSetAllocateInfo::builder().descriptor_pool(desc_pool).set_layouts(&set_layouts);
+	let desc_sets = unsafe { gfx.device.allocate_descriptor_sets(&ci) }.unwrap();
+
+	(desc_pool, desc_sets)
 }
