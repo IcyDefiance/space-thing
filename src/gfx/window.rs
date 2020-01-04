@@ -160,23 +160,29 @@ impl Window {
 
 			let desc_set = self.desc_sets[image_uidx];
 
-			let image_info = [
-				vk::DescriptorImageInfo::builder()
-					.image_view(world.voxels_view)
-					.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+			let voxels_info = [vk::DescriptorImageInfo::builder()
+				.image_view(world.voxels_view)
+				.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+				.build()];
+			let mats_info = [vk::DescriptorImageInfo::builder()
+				.image_view(world.mats_view)
+				.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+				.build()];
+			let write = [
+				vk::WriteDescriptorSet::builder()
+					.dst_set(desc_set)
+					.dst_binding(0)
+					.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+					.image_info(&voxels_info)
 					.build(),
-				vk::DescriptorImageInfo::builder()
-					.image_view(world.mats_view)
-					.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+				vk::WriteDescriptorSet::builder()
+					.dst_set(desc_set)
+					.dst_binding(1)
+					.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+					.image_info(&mats_info)
 					.build(),
 			];
-			let write = vk::WriteDescriptorSet::builder()
-				.dst_set(desc_set)
-				.dst_binding(1)
-				.descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-				.image_info(&image_info)
-				.build();
-			self.gfx.device.update_descriptor_sets(&[write], &[]);
+			self.gfx.device.update_descriptor_sets(&write, &[]);
 
 			// TODO: replace with real volumes
 			let volumes_len = 1;
@@ -503,10 +509,10 @@ fn create_framebuffers(
 }
 
 fn create_desc_pool(gfx: &Gfx, max_sets: u32) -> (vk::DescriptorPool, Vec<vk::DescriptorSet>) {
-	let pool_sizes = [
-		vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::SAMPLER).descriptor_count(max_sets).build(),
-		vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::SAMPLED_IMAGE).descriptor_count(max_sets * 2).build(),
-	];
+	let pool_sizes = [vk::DescriptorPoolSize::builder()
+		.ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+		.descriptor_count(max_sets * 2)
+		.build()];
 	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(max_sets).pool_sizes(&pool_sizes);
 	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
 

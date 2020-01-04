@@ -1,6 +1,6 @@
 use crate::gfx::{image::create_device_local_image, Gfx};
 use ash::{version::DeviceV1_0, vk};
-use std::{i8, sync::Arc};
+use std::sync::Arc;
 use vk_mem::Allocation;
 
 pub struct World {
@@ -18,10 +18,11 @@ impl World {
 		for x in 0..16 {
 			for y in 0..16 {
 				for z in 0..256 {
-					voxels[x * y * z + y * z + z] = z;
+					voxels[x * y * z + y * z + z] = z as i8;
 				}
 			}
 		}
+
 		let (voxels, voxels_alloc, voxels_view) = create_device_local_image(
 			&gfx.device,
 			gfx.queue,
@@ -29,7 +30,7 @@ impl World {
 			gfx.cmdpool_transient,
 			&voxels,
 			vk::ImageType::TYPE_3D,
-			vk::Format::R8_SNORM,
+			vk::Format::R8_UNORM,
 			vk::Extent3D::builder().width(16).height(16).depth(256).build(),
 			vk::ImageUsageFlags::SAMPLED,
 		);

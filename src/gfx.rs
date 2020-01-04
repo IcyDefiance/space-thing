@@ -12,13 +12,7 @@ use ash::{
 use buffer::create_device_local_buffer;
 use memoffset::offset_of;
 use nalgebra::Vector2;
-use std::{
-	collections::HashSet,
-	ffi::{CStr, CString},
-	mem::size_of,
-	slice,
-	sync::Arc,
-};
+use std::{ffi::CString, mem::size_of, slice, sync::Arc};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 
 pub struct Gfx {
@@ -43,7 +37,8 @@ pub struct Gfx {
 	allocator: Allocator,
 	triangle: vk::Buffer,
 	triangle_alloc: Allocation,
-	sampler: vk::Sampler,
+	voxels_sampler: vk::Sampler,
+	mats_sampler: vk::Sampler,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
 }
@@ -109,20 +104,27 @@ impl Gfx {
 			.address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
 			.address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
 			.address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-		let sampler = unsafe { device.create_sampler(&ci, None) }.unwrap();
+		let voxels_sampler = unsafe { device.create_sampler(&ci, None) }.unwrap();
+		let ci = vk::SamplerCreateInfo::builder()
+			.mag_filter(vk::Filter::NEAREST)
+			.min_filter(vk::Filter::NEAREST)
+			.address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+			.address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+			.address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+		let mats_sampler = unsafe { device.create_sampler(&ci, None) }.unwrap();
 
 		let bindings = [
 			vk::DescriptorSetLayoutBinding::builder()
 				.binding(0)
-				.descriptor_type(vk::DescriptorType::SAMPLER)
+				.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
 				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
-				.immutable_samplers(&[sampler])
+				.immutable_samplers(&[voxels_sampler])
 				.build(),
 			vk::DescriptorSetLayoutBinding::builder()
 				.binding(1)
-				.descriptor_count(2)
-				.descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+				.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
 				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
+				.immutable_samplers(&[mats_sampler])
 				.build(),
 		];
 		let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
@@ -178,7 +180,8 @@ impl Gfx {
 			allocator,
 			triangle,
 			triangle_alloc,
-			sampler,
+			voxels_sampler,
+			mats_sampler,
 			vshader,
 			fshader,
 		})
@@ -194,7 +197,8 @@ impl Drop for Gfx {
 			self.allocator.destroy();
 			self.device.destroy_pipeline_layout(self.pipeline_layout, None);
 			self.device.destroy_descriptor_set_layout(self.desc_layout, None);
-			self.device.destroy_sampler(self.sampler, None);
+			self.device.destroy_sampler(self.mats_sampler, None);
+			self.device.destroy_sampler(self.voxels_sampler, None);
 			self.device.destroy_command_pool(self.cmdpool_transient, None);
 			self.device.destroy_command_pool(self.cmdpool, None);
 			self.device.destroy_device(None);

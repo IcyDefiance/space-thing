@@ -4,8 +4,8 @@
 
 layout(location = 0) out vec4 out_color;
 
-layout(binding = 0) uniform sampler smpl;
-layout(binding = 1) uniform texture3D voxels[2];
+layout(binding = 0) uniform sampler3D voxels;
+layout(binding = 1) uniform sampler3D mats;
 
 const vec2 iResolution = vec2(1440.0, 810.0); // FIXME // FIXME-even-more: make it a uniform don't just update it manually ;_;
 
@@ -30,8 +30,8 @@ float sdBox(vec3 p, vec3 b) {
 }
 
 float F(vec3 pos) {
-	//vec3 tc = pos / vec3(16.0, 16.0, 256.0);
-	//return texture(sampler3D(voxels[0], smpl), tc).r;
+	vec3 tc = pos / vec3(16.0, 16.0, 256.0);
+	return texture(voxels, tc).r;
 	float d = pos.z;
 	for(int i=0;i<5;i++) {
 		vec3 boxPos = vec3(0.0, 0.0, float(2*i) + 0.5);
