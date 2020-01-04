@@ -4,8 +4,6 @@ pub mod window;
 pub mod world;
 
 use crate::fs::read_bytes;
-#[cfg(debug_assertions)]
-use ash::extensions::ext;
 use ash::{
 	extensions::khr,
 	version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
@@ -14,8 +12,6 @@ use ash::{
 use buffer::create_device_local_buffer;
 use memoffset::offset_of;
 use nalgebra::Vector2;
-#[cfg(debug_assertions)]
-use std::ffi::c_void;
 use std::{
 	collections::HashSet,
 	ffi::{CStr, CString},
@@ -29,16 +25,12 @@ pub struct Gfx {
 	_entry: Entry,
 	instance: Instance,
 	khr_surface: khr::Surface,
-	#[cfg(debug_assertions)]
-	debug_utils: ext::DebugUtils,
 	#[cfg(windows)]
 	khr_win32_surface: khr::Win32Surface,
 	#[cfg(unix)]
 	khr_xlib_surface: khr::XlibSurface,
 	#[cfg(unix)]
 	khr_wayland_surface: khr::WaylandSurface,
-	#[cfg(debug_assertions)]
-	debug_messenger: vk::DebugUtilsMessengerEXT,
 	physical_device: vk::PhysicalDevice,
 	queue_family: u32,
 	device: Device,
@@ -71,49 +63,20 @@ impl Gfx {
 		));
 
 		let mut exts = vec![b"VK_KHR_surface\0".as_ptr() as _];
-		#[cfg(debug_assertions)]
-		exts.push(b"VK_EXT_debug_utils\0".as_ptr() as _);
 		#[cfg(windows)]
 		exts.push(b"VK_KHR_win32_surface\0".as_ptr() as _);
 		#[cfg(unix)]
 		exts.push(b"VK_KHR_xlib_surface\0".as_ptr() as _);
 
-		#[allow(unused_mut)]
-		let mut layers_pref = HashSet::new();
-		#[cfg(debug_assertions)]
-		layers_pref.insert(CStr::from_bytes_with_nul(b"VK_LAYER_LUNARG_standard_validation\0").unwrap());
-		let layers = entry.enumerate_instance_layer_properties().unwrap();
-		let layers = layers
-			.iter()
-			.map(|props| unsafe { CStr::from_ptr(props.layer_name.as_ptr()) })
-			.collect::<HashSet<_>>()
-			.intersection(&layers_pref)
-			.map(|ext| ext.as_ptr())
-			.collect::<Vec<_>>();
-
-		let ci = vk::InstanceCreateInfo::builder()
-			.application_info(&app_info)
-			.enabled_layer_names(&layers)
-			.enabled_extension_names(&exts);
+		let ci = vk::InstanceCreateInfo::builder().application_info(&app_info).enabled_extension_names(&exts);
 		let instance = unsafe { entry.create_instance(&ci, None) }.unwrap();
 		let khr_surface = khr::Surface::new(&entry, &instance);
-		#[cfg(debug_assertions)]
-		let debug_utils = ext::DebugUtils::new(&entry, &instance);
 		#[cfg(windows)]
 		let khr_win32_surface = khr::Win32Surface::new(&entry, &instance);
 		#[cfg(unix)]
 		let khr_xlib_surface = khr::XlibSurface::new(&entry, &instance);
 		#[cfg(unix)]
 		let khr_wayland_surface = khr::WaylandSurface::new(&entry, &instance);
-
-		#[cfg(debug_assertions)]
-		let debug_messenger = {
-			let ci = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-				.message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::all())
-				.message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
-				.pfn_user_callback(Some(user_callback));
-			unsafe { debug_utils.create_debug_utils_messenger(&ci, None) }.unwrap()
-		};
 
 		let physical_device = unsafe { instance.enumerate_physical_devices() }.unwrap()[0];
 
@@ -197,16 +160,12 @@ impl Gfx {
 			_entry: entry,
 			instance,
 			khr_surface,
-			#[cfg(debug_assertions)]
-			debug_utils,
 			#[cfg(windows)]
 			khr_win32_surface,
 			#[cfg(unix)]
 			khr_xlib_surface,
 			#[cfg(unix)]
 			khr_wayland_surface,
-			#[cfg(debug_assertions)]
-			debug_messenger,
 			physical_device,
 			queue_family,
 			device,
@@ -239,8 +198,6 @@ impl Drop for Gfx {
 			self.device.destroy_command_pool(self.cmdpool_transient, None);
 			self.device.destroy_command_pool(self.cmdpool, None);
 			self.device.destroy_device(None);
-			#[cfg(debug_assertions)]
-			self.debug_utils.destroy_debug_utils_messenger(self.debug_messenger, None);
 			self.instance.destroy_instance(None);
 		}
 	}
@@ -274,25 +231,4 @@ fn create_shader(device: &Device, code: &[u8]) -> vk::ShaderModule {
 	let code = unsafe { slice::from_raw_parts(code.as_ptr() as _, code.len() / 4) };
 	let ci = vk::ShaderModuleCreateInfo::builder().code(code);
 	unsafe { device.create_shader_module(&ci, None) }.unwrap()
-}
-
-#[cfg(debug_assertions)]
-unsafe extern "system" fn user_callback(
-	message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-	message_types: vk::DebugUtilsMessageTypeFlagsEXT,
-	p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
-	_p_user_data: *mut c_void,
-) -> vk::Bool32 {
-	let callback_data = &*p_callback_data;
-	if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE) {
-		log::debug!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
-	} else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::INFO) {
-		log::info!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
-	} else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
-		log::warn!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
-	} else {
-		log::error!("{:?}: {:?}", message_types, CStr::from_ptr(callback_data.p_message));
-	}
-
-	vk::FALSE
 }
