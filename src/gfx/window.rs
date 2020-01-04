@@ -162,19 +162,18 @@ impl Window {
 
 			let image_info = [
 				vk::DescriptorImageInfo::builder()
-					.sampler(self.gfx.sampler)
 					.image_view(world.voxels_view)
 					.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
 					.build(),
 				vk::DescriptorImageInfo::builder()
-					.sampler(self.gfx.sampler)
 					.image_view(world.mats_view)
 					.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
 					.build(),
 			];
 			let write = vk::WriteDescriptorSet::builder()
 				.dst_set(desc_set)
-				.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+				.dst_binding(1)
+				.descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
 				.image_info(&image_info)
 				.build();
 			self.gfx.device.update_descriptor_sets(&[write], &[]);
@@ -504,10 +503,10 @@ fn create_framebuffers(
 }
 
 fn create_desc_pool(gfx: &Gfx, max_sets: u32) -> (vk::DescriptorPool, Vec<vk::DescriptorSet>) {
-	let pool_sizes = [vk::DescriptorPoolSize::builder()
-		.ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-		.descriptor_count(max_sets * 2)
-		.build()];
+	let pool_sizes = [
+		vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::SAMPLER).descriptor_count(max_sets).build(),
+		vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::SAMPLED_IMAGE).descriptor_count(max_sets * 2).build(),
+	];
 	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(max_sets).pool_sizes(&pool_sizes);
 	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
 

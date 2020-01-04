@@ -14,12 +14,20 @@ pub struct World {
 }
 impl World {
 	pub fn new(gfx: Arc<Gfx>) -> Self {
+		let mut voxels = vec![0; 16 * 16 * 256];
+		for x in 0..16 {
+			for y in 0..16 {
+				for z in 0..256 {
+					voxels[x * y * z + y * z + z] = z;
+				}
+			}
+		}
 		let (voxels, voxels_alloc, voxels_view) = create_device_local_image(
 			&gfx.device,
 			gfx.queue,
 			&gfx.allocator,
 			gfx.cmdpool_transient,
-			&[i8::MAX; 16 * 16 * 256],
+			&voxels,
 			vk::ImageType::TYPE_3D,
 			vk::Format::R8_SNORM,
 			vk::Extent3D::builder().width(16).height(16).depth(256).build(),

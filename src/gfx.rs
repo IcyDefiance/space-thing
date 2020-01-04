@@ -148,12 +148,20 @@ impl Gfx {
 			.address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
 		let sampler = unsafe { device.create_sampler(&ci, None) }.unwrap();
 
-		let bindings = [vk::DescriptorSetLayoutBinding::builder()
-			.binding(0)
-			.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-			.stage_flags(vk::ShaderStageFlags::FRAGMENT)
-			.immutable_samplers(&[sampler, sampler])
-			.build()];
+		let bindings = [
+			vk::DescriptorSetLayoutBinding::builder()
+				.binding(0)
+				.descriptor_type(vk::DescriptorType::SAMPLER)
+				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
+				.immutable_samplers(&[sampler])
+				.build(),
+			vk::DescriptorSetLayoutBinding::builder()
+				.binding(1)
+				.descriptor_count(2)
+				.descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
+				.build(),
+		];
 		let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
 		let desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
 
