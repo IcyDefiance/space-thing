@@ -4,7 +4,22 @@ use ash::{version::DeviceV1_0, vk, Device};
 use std::{mem::size_of, slice, u64};
 use vk_mem::{Allocation, AllocationCreateInfo, Allocator, MemoryUsage};
 
-pub(super) fn create_device_local_buffer<T: Copy>(
+pub(super) fn create_cpu_buffer<T>(allocator: &Allocator, len: usize) -> (vk::Buffer, Allocation, &'static mut [T]) {
+	unsafe {
+		let size = size_of::<T>() as u64 * len as u64;
+
+		let ci = ash::vk::BufferCreateInfo::builder().size(size).usage(vk::BufferUsageFlags::TRANSFER_SRC);
+		let aci = AllocationCreateInfo { usage: MemoryUsage::CpuOnly, ..Default::default() };
+		let (buf, alloc, _) = allocator.create_buffer(&ci, &aci).unwrap();
+
+		let bufdata = allocator.map_memory(&alloc).unwrap();
+		let bufdata = slice::from_raw_parts_mut(bufdata as _, len as _);
+
+		(buf, alloc, bufdata)
+	}
+}
+
+pub(super) fn create_device_local_buffer<T: Copy + 'static>(
 	device: &Device,
 	queue: vk::Queue,
 	allocator: &Allocator,
@@ -15,13 +30,8 @@ pub(super) fn create_device_local_buffer<T: Copy>(
 	unsafe {
 		let size = size_of::<T>() as u64 * data.len() as u64;
 
-		let ci = ash::vk::BufferCreateInfo::builder().size(size).usage(vk::BufferUsageFlags::TRANSFER_SRC);
-		let aci = AllocationCreateInfo { usage: MemoryUsage::CpuOnly, ..Default::default() };
-		let (cpubuf, cpualloc, _) = allocator.create_buffer(&ci, &aci).unwrap();
-
-		let bufdata = allocator.map_memory(&cpualloc).unwrap();
-		let bufdata = slice::from_raw_parts_mut(bufdata as *mut T, (size / size_of::<T>() as u64) as _);
-		bufdata.copy_from_slice(data);
+		let (cpubuf, cpualloc, cpumap) = create_cpu_buffer::<T>(allocator, data.len());
+		cpumap.copy_from_slice(data);
 		allocator.unmap_memory(&cpualloc).unwrap();
 
 		let ci = ash::vk::BufferCreateInfo::builder().size(size).usage(usage | vk::BufferUsageFlags::TRANSFER_DST);

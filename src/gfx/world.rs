@@ -1,25 +1,37 @@
-use crate::gfx::{image::create_device_local_image, Gfx};
+use crate::gfx::{buffer::create_cpu_buffer, image::create_device_local_image, Gfx};
 use ash::{version::DeviceV1_0, vk};
 use std::{ptr::write_bytes, sync::Arc};
 use vk_mem::Allocation;
 
-const res: usize = 4;
-const range: f32 = 10.0;
+const RES: usize = 4;
+const RANGE: f32 = 10.0;
 
 pub struct World {
 	gfx: Arc<Gfx>,
+
+	voxels_cpu: vk::Buffer,
+	voxels_cpualloc: Allocation,
+	voxels_cpumap: &'static mut [u8],
 	voxels: vk::Image,
 	voxels_alloc: Allocation,
 	pub voxels_view: vk::ImageView,
+
+	mats_cpu: vk::Buffer,
+	mats_cpualloc: Allocation,
+	mats_cpumap: &'static mut [u8],
 	mats: vk::Image,
 	mats_alloc: Allocation,
 	pub mats_view: vk::ImageView,
 }
 impl World {
 	pub fn new(gfx: Arc<Gfx>) -> Self {
-		let res32 = res as u32;
-		let res64 = res as u64;
+		let res32 = RES as u32;
+		let res64 = RES as u64;
+		let chunk_size = 16 * 16 * 256 * res64 * res64 * res64;
+		let chunk_extent = vk::Extent3D { width: 16 * res32, height: 16 * res32, depth: 256 * res32 };
 
+		let (voxels_cpu, voxels_cpualloc, voxels_cpumap) = create_cpu_buffer::<u8>(&gfx.allocator, chunk_size as _);
+		init_voxels(voxels_cpumap);
 		let (voxels, voxels_alloc, voxels_view) = create_device_local_image(
 			&gfx.device,
 			gfx.queue,
@@ -27,11 +39,13 @@ impl World {
 			gfx.cmdpool_transient,
 			vk::ImageType::TYPE_3D,
 			vk::Format::R8_UNORM,
-			vk::Extent3D::builder().width(16 * res32).height(16 * res32).depth(256 * res32).build(),
+			chunk_extent,
 			vk::ImageUsageFlags::SAMPLED,
-			16 * 16 * 256 * res64 * res64 * res64,
-			init_voxels,
+			voxels_cpu,
 		);
+
+		let (mats_cpu, mats_cpualloc, mats_cpumap) = create_cpu_buffer::<u8>(&gfx.allocator, chunk_size as _);
+		unsafe { write_bytes(mats_cpumap.as_mut_ptr(), 0, mats_cpumap.len()) };
 		let (mats, mats_alloc, mats_view) = create_device_local_image(
 			&gfx.device,
 			gfx.queue,
@@ -39,22 +53,39 @@ impl World {
 			gfx.cmdpool_transient,
 			vk::ImageType::TYPE_3D,
 			vk::Format::R8_UINT,
-			vk::Extent3D::builder().width(16 * res32).height(16 * res32).depth(256 * res32).build(),
+			chunk_extent,
 			vk::ImageUsageFlags::SAMPLED,
-			16 * 16 * 256 * res64 * res64 * res64,
-			|mats| unsafe { write_bytes(mats.as_mut_ptr(), 0, mats.len()) },
+			mats_cpu,
 		);
 
-		Self { gfx, voxels, voxels_alloc, voxels_view, mats, mats_alloc, mats_view }
+		Self {
+			gfx,
+			voxels_cpu,
+			voxels_cpualloc,
+			voxels_cpumap,
+			voxels,
+			voxels_alloc,
+			voxels_view,
+			mats_cpu,
+			mats_cpualloc,
+			mats_cpumap,
+			mats,
+			mats_alloc,
+			mats_view,
+		}
 	}
 }
 impl Drop for World {
 	fn drop(&mut self) {
 		unsafe {
+			self.gfx.device.destroy_buffer(self.voxels_cpu, None);
+			self.gfx.allocator.free_memory(&self.voxels_cpualloc).unwrap();
 			self.gfx.device.destroy_image_view(self.voxels_view, None);
 			self.gfx.device.destroy_image(self.voxels, None);
 			self.gfx.allocator.free_memory(&self.voxels_alloc).unwrap();
 
+			self.gfx.device.destroy_buffer(self.mats_cpu, None);
+			self.gfx.allocator.free_memory(&self.mats_cpualloc).unwrap();
 			self.gfx.device.destroy_image_view(self.mats_view, None);
 			self.gfx.device.destroy_image(self.mats, None);
 			self.gfx.allocator.free_memory(&self.mats_alloc).unwrap();
@@ -63,12 +94,14 @@ impl Drop for World {
 }
 
 fn init_voxels(voxels: &mut [u8]) {
-	for z in 0..(256 * res) {
-		for y in 0..(16 * res) {
-			for x in 0..(16 * res) {
-				let px = (x as f32) / (res as f32) - 8.0;
-				let py = (y as f32) / (res as f32) - 8.0;
-				let pz = (z as f32) / (res as f32) - 128.0;
+	let resf = RES as f32;
+
+	for z in 0..(256 * RES) {
+		for y in 0..(16 * RES) {
+			for x in 0..(16 * RES) {
+				let px = (x as f32) / resf - 8.0;
+				let py = (y as f32) / resf - 8.0;
+				let pz = (z as f32) / resf - 128.0;
 				let mut sd = pz;
 
 				// sphere
@@ -104,8 +137,8 @@ fn init_voxels(voxels: &mut [u8]) {
 					sd = cd;
 				}
 
-				let d = 255.0 * (sd + 1.0) / (range + 1.0);
-				voxels[x + y * 16 * res + z * 16 * 16 * res * res] = (d.round() as i64).max(0).min(255) as u8;
+				let d = 255.0 * (sd + 1.0) / (RANGE + 1.0);
+				voxels[x + y * 16 * RES + z * 16 * 16 * RES * RES] = (d.round() as i64).max(0).min(255) as u8;
 			}
 		}
 	}

@@ -1,5 +1,4 @@
 use ash::{version::DeviceV1_0, vk, Device};
-use std::{mem::size_of, slice, u64};
 use vk_mem::{Allocation, AllocationCreateInfo, Allocator, MemoryUsage};
 
 pub(super) fn create_device_local_image(
@@ -11,19 +10,9 @@ pub(super) fn create_device_local_image(
 	format: vk::Format,
 	extent: vk::Extent3D,
 	usage: vk::ImageUsageFlags,
-	size: u64,
-	cb: impl FnOnce(&mut [u8]),
+	src: vk::Buffer,
 ) -> (vk::Image, Allocation, vk::ImageView) {
 	unsafe {
-		let ci = ash::vk::BufferCreateInfo::builder().size(size).usage(vk::BufferUsageFlags::TRANSFER_SRC);
-		let aci = AllocationCreateInfo { usage: MemoryUsage::CpuOnly, ..Default::default() };
-		let (cpubuf, cpualloc, _) = allocator.create_buffer(&ci, &aci).unwrap();
-
-		let bufdata = allocator.map_memory(&cpualloc).unwrap();
-		let mut bufdata = slice::from_raw_parts_mut(bufdata, size as _);
-		cb(&mut bufdata);
-		allocator.unmap_memory(&cpualloc).unwrap();
-
 		let ci = ash::vk::ImageCreateInfo::builder()
 			.image_type(vk::ImageType::TYPE_3D)
 			.image_type(image_type)
@@ -53,7 +42,7 @@ pub(super) fn create_device_local_image(
 			)
 			.image_extent(extent)
 			.build();
-		device.cmd_copy_buffer_to_image(cmd, cpubuf, image, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[copy]);
+		device.cmd_copy_buffer_to_image(cmd, src, image, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[copy]);
 
 		transition_layout(
 			device,
@@ -85,8 +74,6 @@ pub(super) fn create_device_local_image(
 
 		device.destroy_fence(fence, None);
 		device.free_command_buffers(cmdpool, &[cmd]);
-		device.destroy_buffer(cpubuf, None);
-		allocator.free_memory(&cpualloc).unwrap();
 
 		(image, allocation, image_view)
 	}
