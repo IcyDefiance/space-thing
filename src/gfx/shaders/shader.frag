@@ -13,7 +13,7 @@ const vec2 AOSize = vec2(3.14159, 2.0 * 3.14159 * 3.14159);
 const float ViewDistance = 1000.0;
 const vec3 AmbientLight = vec3(0.5, 0.5, 0.5);
 const float MinStepSize = 0.01;
-const float GridSize = 1.0;
+const float GridSize = 0.25;
 const float tiny = 0.001;
 
 const vec4 cam_proj = vec4(0.5625, 1.0, -1.002002, -1.001001);
@@ -30,14 +30,18 @@ float sdBox(vec3 p, vec3 b) {
 }
 
 float F(vec3 pos) {
-	vec3 tc = pos / vec3(16.0, 16.0, 256.0);
-	return texture(voxels, tc).r;
-	float d = pos.z;
+	const float range = 10.0;
+	const vec3 BlockSize = vec3(16.0, 16.0, 256.0);
+	vec3 tc = ((pos+0.5) / BlockSize) + vec3(0.5);
+	float d = texture(voxels, tc).r * (range + 1.0) - 1.0;
+	/*
+	d = min(d, pos.z);
 	for(int i=0;i<5;i++) {
 		vec3 boxPos = vec3(0.0, 0.0, float(2*i) + 0.5);
 		float v = sdBox(pos - boxPos, vec3(0.5));
 		d = min(d, v);
 	}
+	//*/
 	return d;
 }
 
@@ -112,7 +116,6 @@ void main() {
 	vec3 pos = cam_pos;
 	float t = tiny;
 	for(int i=0;i<128;i++) {
-		// use low-res volume texture here
 		float d = F(pos + dir * t);
 		if (d < 0.0) break;
 		t += max(d, MinStepSize);
@@ -123,15 +126,19 @@ void main() {
 	float dOutside = F(pos + dir * (t - GridSize));
 	t += GridSize * dInside / (dOutside - dInside);
 	pos += dir * t;
-	for(int i=0;i<128;i++) {
-		// use high-res volume texture here
+	for(int i=0;i<64;i++) {
 		float d = F(pos);
 		pos += dir * d;
 		if (abs(d) < tiny) break;
 	}
 
-	const vec2 k = vec2(tiny, -tiny);
-	vec3 nor = normalize(k.xyy*F(pos + k.xyy) + k.yyx*F(pos + k.yyx) + k.yxy*F(pos + k.yxy) + k.xxx*F(pos + k.xxx));
+	const float k = 0.125 * 0.5;
+	//vec3 nor = normalize(k.xyy*F(pos + k.xyy) + k.yyx*F(pos + k.yyx) + k.yxy*F(pos + k.yxy) + k.xxx*F(pos + k.xxx));
+	vec3 nor = normalize(vec3(
+		F(pos + vec3(k, 0.0, 0.0)) - F(pos - vec3(k, 0.0, 0.0)),
+		F(pos + vec3(0.0, k, 0.0)) - F(pos - vec3(0.0, k, 0.0)),
+		F(pos + vec3(0.0, 0.0, k)) - F(pos - vec3(0.0, 0.0, k))
+	));
 
 	// add texturing here
 	vec3 color = vec3(0.5);
