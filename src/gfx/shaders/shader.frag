@@ -1,19 +1,21 @@
 #version 450
 
-#define AOQuality 8
+#define RayIntersectQuality 1024
+#define RayRefineQuality 256
+#define ShadowQuality 32
+#define AOQuality 32
 
 layout(location = 0) out vec4 out_color;
 
 layout(binding = 0) uniform sampler3D voxels;
 layout(binding = 1) uniform sampler3D mats;
 
-const vec2 iResolution = vec2(1440.0, 810.0); // FIXME // FIXME-even-more: make it a uniform don't just update it manually ;_;
-
-const vec2 AOSize = vec2(3.14159, 2.0 * 3.14159 * 3.14159);
+const vec2 iResolution = vec2(1440.0, 810.0);
 const float ViewDistance = 1000.0;
 const vec3 AmbientLight = vec3(0.5, 0.5, 0.5);
 const float MinStepSize = 0.01;
 const float GridSize = 0.25;
+const vec2 AOSize = vec2(2.0, GridSize * GridSize);
 const float tiny = 0.001;
 
 const vec4 cam_proj = vec4(0.5625, 1.0, -1.002002, -1.001001);
@@ -33,27 +35,25 @@ float F(vec3 pos) {
 	const float range = 10.0;
 	const vec3 BlockSize = vec3(16.0, 16.0, 256.0);
 	vec3 tc = ((pos+0.5) / BlockSize) + vec3(0.5);
-	float d = texture(voxels, tc).r * (range + 1.0) - 1.0;
-	/*
-	d = min(d, pos.z);
-	for(int i=0;i<5;i++) {
-		vec3 boxPos = vec3(0.0, 0.0, float(2*i) + 0.5);
-		float v = sdBox(pos - boxPos, vec3(0.5));
-		d = min(d, v);
-	}
-	//*/
-	return d;
+	vec3 ej = vec3(1.0/BlockSize);
+	tc = clamp(tc, ej, 1.0 - ej);
+	return texture(voxels, tc).r * (range + 1.0) - 1.0;
 }
 
 float shadowRay(vec3 pos, vec3 dir) {
-	const float sharpness = 8.0;
+	const float sharpness = 16.0;
 	float s = 1.0;
-	float t = 0.5 * GridSize;
-	for(int i=0;i<64;i++) {
-		vec3 p = pos + dir * t;
-		float d = F(p);
-		s = min(s, sharpness * d / t);
-		t += max(d, MinStepSize);
+	float t = GridSize * GridSize;
+	float ph = tiny;
+	for(int i=0;i<ShadowQuality;i++) {
+		float h = F(pos + dir * t);
+        if (h < tiny) return 0.0;
+        float y = h*h / (2.0*ph);
+        float d = sqrt(h*h - y*y);
+        s = min(s, sharpness*d/max(0.0, t-y));
+        ph = h;
+        t += h;
+        if (t > ViewDistance) break;
 	}
 	return max(s, 0.0);
 }
@@ -103,8 +103,7 @@ float ao(vec3 p, vec3 n) {
 		ao += l - max(vec2(F(p + dx), F(p + dy)), vec2(0.0));
 	}
 	ao = clamp(1.0 - 2.0 * ao * Qi / AOSize, 0.0, 1.0);
-	float r = 0.618 * (ao.x + ao.y);
-	return min(r * r, 1.0);
+	return ao.x * sqrt(ao.y);
 }
 #endif
 
@@ -115,7 +114,7 @@ void main() {
 		1.0 - 2.0*gl_FragCoord.y/iResolution.y)));
 	vec3 pos = cam_pos;
 	float t = tiny;
-	for(int i=0;i<128;i++) {
+	for(int i=0;i<RayIntersectQuality;i++) {
 		float d = F(pos + dir * t);
 		if (d < 0.0) break;
 		t += max(d, MinStepSize);
@@ -126,13 +125,13 @@ void main() {
 	float dOutside = F(pos + dir * (t - GridSize));
 	t += GridSize * dInside / (dOutside - dInside);
 	pos += dir * t;
-	for(int i=0;i<64;i++) {
+	for(int i=0;i<RayRefineQuality;i++) {
 		float d = F(pos);
 		pos += dir * d;
 		if (abs(d) < tiny) break;
 	}
 
-	const float k = 0.125 * 0.5;
+	const float k = 0.01; //0.125
 	//vec3 nor = normalize(k.xyy*F(pos + k.xyy) + k.yyx*F(pos + k.yyx) + k.yxy*F(pos + k.yxy) + k.xxx*F(pos + k.xxx));
 	vec3 nor = normalize(vec3(
 		F(pos + vec3(k, 0.0, 0.0)) - F(pos - vec3(k, 0.0, 0.0)),

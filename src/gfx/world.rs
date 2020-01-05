@@ -6,7 +6,6 @@ use vk_mem::Allocation;
 const res: usize = 4;
 const range: f32 = 10.0;
 
-
 pub struct World {
 	gfx: Arc<Gfx>,
 	voxels: vk::Image,
@@ -41,7 +40,7 @@ impl World {
 					// box
 					qx = px.abs() - 0.5 * 0.618;
 					qy = py.abs() - 0.5 * 0.618;
-					qz = (pz - 1.5).abs() - 0.5 * 0.618;
+					qz = (pz - 1.5).abs() - 0.5;
 					cd = (qx*qx.max(0.0) + qy*qy.max(0.0) + qz*qz.max(0.0)).sqrt() + qx.max(qy.max(qz)).min(0.0);
 					if cd < sd {sd = cd;}
 
