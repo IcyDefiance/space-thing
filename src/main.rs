@@ -68,7 +68,7 @@ async fn amain() {
 				delta = now - time;
 				time = now;
 
-				let speed = 2.0;
+				let speed = 10.0;
 				let mut movement = Vector3::from([
 					(keys.contains(&VirtualKeyCode::D) as i32 - keys.contains(&VirtualKeyCode::A) as i32) as f32,
 					(keys.contains(&VirtualKeyCode::W) as i32 - keys.contains(&VirtualKeyCode::S) as i32) as f32,
@@ -80,7 +80,7 @@ async fn amain() {
 				let mouse_sensitivity = 0.02;
 				rotation *= mouse_sensitivity;
 
-				camera.rot *= UnitQuaternion::from_euler_angles(0.0, -rotation.y as f32, -rotation.x as f32);
+				// camera.rot *= UnitQuaternion::from_euler_angles(rotation.x, 0.0, -rotation.y);
 				camera.pos += camera.rot * movement;
 
 				rotation = zero();
