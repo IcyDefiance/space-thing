@@ -68,14 +68,14 @@ async fn amain() {
 				delta = now - time;
 				time = now;
 
-				let speed = 10.0;
+				let speed = 2.0;
 				let mut movement = Vector3::from([
 					(keys.contains(&VirtualKeyCode::D) as i32 - keys.contains(&VirtualKeyCode::A) as i32) as f32,
 					(keys.contains(&VirtualKeyCode::W) as i32 - keys.contains(&VirtualKeyCode::S) as i32) as f32,
 					(keys.contains(&VirtualKeyCode::Space) as i32 - keys.contains(&VirtualKeyCode::LShift) as i32)
 						as f32,
 				]);
-				movement *= delta.as_secs_f32();
+				movement *= delta.as_secs_f32() * speed;
 
 				let mouse_sensitivity = 0.02;
 				rotation *= mouse_sensitivity;

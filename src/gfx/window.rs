@@ -208,7 +208,7 @@ impl Window {
 					self.gfx.pipeline_layout,
 					vk::ShaderStageFlags::FRAGMENT,
 					0,
-					slice::from_raw_parts(&camera as *const _ as _, size_of::<Camera>()),
+					slice::from_raw_parts(camera as *const _ as _, size_of::<Camera>()),
 				);
 				self.gfx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
 				self.gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[self.gfx.triangle], &[0]);
