@@ -125,6 +125,11 @@ float ao(vec3 p, vec3 n) {
 #endif
 }
 
+vec3 T(vec2 uv) {
+	uv *= 3.14159 * 1.618;
+	return vec3(sin(uv.x)*sin(uv.y)*0.5 + 0.5);
+}
+
 void main() {
 #ifdef IterationDebugView
 	float iters = 0.0;
@@ -180,8 +185,13 @@ void main() {
 		F(pos + vec3(0.0, 0.0, k)) - F(pos - vec3(0.0, 0.0, k))
 	));
 
-	// add texturing here
-	vec3 color = vec3(0.5);
+	vec3 triplane = nor * nor;
+	triplane *= triplane;
+	// triplane *= triplane; // uncomment this for a tighter fade between sides
+	vec3 colorX = T(pos.yz);
+	vec3 colorY = T(pos.xz);
+	vec3 colorZ = T(pos.xy);
+	vec3 color = (colorX * triplane.x + colorY * triplane.y + colorZ * triplane.z) / (triplane.x + triplane.y + triplane.z);
 
 #ifdef IterationDebugView
 	vec2 aoResult = ao(pos, nor);
