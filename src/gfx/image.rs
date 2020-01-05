@@ -2,27 +2,26 @@ use ash::{version::DeviceV1_0, vk, Device};
 use std::{mem::size_of, slice, u64};
 use vk_mem::{Allocation, AllocationCreateInfo, Allocator, MemoryUsage};
 
-pub(super) fn create_device_local_image<T: Copy>(
+pub(super) fn create_device_local_image(
 	device: &Device,
 	queue: vk::Queue,
 	allocator: &Allocator,
 	cmdpool: vk::CommandPool,
-	data: &[T],
 	image_type: vk::ImageType,
 	format: vk::Format,
 	extent: vk::Extent3D,
 	usage: vk::ImageUsageFlags,
+	size: u64,
+	cb: impl FnOnce(&mut [u8]),
 ) -> (vk::Image, Allocation, vk::ImageView) {
 	unsafe {
-		let size = size_of::<T>() as u64 * data.len() as u64;
-
 		let ci = ash::vk::BufferCreateInfo::builder().size(size).usage(vk::BufferUsageFlags::TRANSFER_SRC);
 		let aci = AllocationCreateInfo { usage: MemoryUsage::CpuOnly, ..Default::default() };
 		let (cpubuf, cpualloc, _) = allocator.create_buffer(&ci, &aci).unwrap();
 
 		let bufdata = allocator.map_memory(&cpualloc).unwrap();
-		let bufdata = slice::from_raw_parts_mut(bufdata as *mut T, (size / size_of::<T>() as u64) as _);
-		bufdata.copy_from_slice(data);
+		let mut bufdata = slice::from_raw_parts_mut(bufdata, size as _);
+		cb(&mut bufdata);
 		allocator.unmap_memory(&cpualloc).unwrap();
 
 		let ci = ash::vk::ImageCreateInfo::builder()
