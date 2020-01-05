@@ -11,6 +11,11 @@ layout(location = 0) out vec4 out_color;
 layout(binding = 0) uniform sampler3D voxels;
 layout(binding = 1) uniform sampler3D mats;
 
+layout(push_constant) uniform PushConsts {
+	vec3 cam_pos;
+	vec4 cam_rot;
+} pc;
+
 const vec2 iResolution = vec2(1440.0, 810.0);
 const float ViewDistance = 256.0;
 const vec3 AmbientLight = vec3(0.25, 0.5, 0.75);
@@ -20,8 +25,6 @@ const vec2 AOSize = vec2(2.0, GridSize * GridSize);
 const float tiny = 0.001;
 
 const vec4 cam_proj = vec4(0.5625, 1.0, -1.002002, -1.001001);
-const vec3 cam_pos = vec3(0.0, -4.0, 1.618);
-const vec4 cam_rot = vec4(0.0, 0.0, 0.0, 1.0);
 
 vec3 quat_mul(vec4 quat, vec3 vec) {
 	return cross(quat.xyz, cross(quat.xyz, vec) + vec * quat.w) * 2.0 + vec;
@@ -126,11 +129,11 @@ void main() {
 #ifdef IterationDebugView
 	float iters = 0.0;
 #endif
-	vec3 dir = quat_mul(cam_rot, normalize(vec3(
+	vec3 dir = quat_mul(pc.cam_rot, normalize(vec3(
 		(2.0*gl_FragCoord.x - iResolution.x) / iResolution.y,
 		1.0,
 		1.0 - 2.0*gl_FragCoord.y/iResolution.y)));
-	vec3 pos = cam_pos;
+	vec3 pos = pc.cam_pos;
 	float t = tiny;
 	for(int i=0;i<RayIntersectQuality;i++) {
 		float d = F(pos + dir * t);

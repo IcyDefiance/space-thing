@@ -1,9 +1,10 @@
-use crate::gfx::{world::World, Gfx, TriangleVertex};
+use crate::gfx::{camera::Camera, world::World, Gfx, TriangleVertex};
 use ash::{version::DeviceV1_0, vk, Device};
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::{
 	cmp::{max, min},
 	ffi::CStr,
+	mem::size_of,
 	slice,
 	sync::Arc,
 	u32,
@@ -120,7 +121,7 @@ impl Window {
 		}
 	}
 
-	pub fn draw(&mut self, world: &World) {
+	pub fn draw(&mut self, world: &World, camera: &Camera) {
 		unsafe {
 			if self.recreate_swapchain {
 				self.recreate_swapchain();
@@ -202,6 +203,13 @@ impl Window {
 					.framebuffer(framebuffer);
 				let info = vk::CommandBufferBeginInfo::builder().flags(flags).inheritance_info(&inherit);
 				self.gfx.device.begin_command_buffer(cmd, &info).unwrap();
+				self.gfx.device.cmd_push_constants(
+					cmd,
+					self.gfx.pipeline_layout,
+					vk::ShaderStageFlags::FRAGMENT,
+					0,
+					slice::from_raw_parts(&camera as *const _ as _, size_of::<Camera>()),
+				);
 				self.gfx.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
 				self.gfx.device.cmd_bind_vertex_buffers(cmd, 0, &[self.gfx.triangle], &[0]);
 				self.gfx.device.cmd_bind_descriptor_sets(

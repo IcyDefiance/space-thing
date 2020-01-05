@@ -1,9 +1,10 @@
 pub mod buffer;
+pub mod camera;
 pub mod image;
 pub mod window;
 pub mod world;
 
-use crate::fs::read_bytes;
+use crate::{fs::read_bytes, gfx::camera::Camera};
 use ash::{
 	extensions::khr,
 	version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
@@ -131,7 +132,14 @@ impl Gfx {
 		let desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
 
 		let desc_layouts = [desc_layout];
-		let ci = vk::PipelineLayoutCreateInfo::builder().set_layouts(&desc_layouts);
+		let push_constant_ranges = [vk::PushConstantRange::builder()
+			.stage_flags(vk::ShaderStageFlags::FRAGMENT)
+			.offset(0)
+			.size(size_of::<Camera>() as _)
+			.build()];
+		let ci = vk::PipelineLayoutCreateInfo::builder()
+			.set_layouts(&desc_layouts)
+			.push_constant_ranges(&push_constant_ranges);
 		let pipeline_layout = unsafe { device.create_pipeline_layout(&ci, None) }.unwrap();
 
 		let ci = AllocatorCreateInfo {

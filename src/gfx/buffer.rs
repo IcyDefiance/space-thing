@@ -8,7 +8,7 @@ pub(super) fn create_cpu_buffer<T>(allocator: &Allocator, len: usize) -> (vk::Bu
 	unsafe {
 		let size = size_of::<T>() as u64 * len as u64;
 
-		let ci = ash::vk::BufferCreateInfo::builder().size(size).usage(vk::BufferUsageFlags::TRANSFER_SRC);
+		let ci = vk::BufferCreateInfo::builder().size(size).usage(vk::BufferUsageFlags::TRANSFER_SRC);
 		let aci = AllocationCreateInfo { usage: MemoryUsage::CpuOnly, ..Default::default() };
 		let (buf, alloc, _) = allocator.create_buffer(&ci, &aci).unwrap();
 
@@ -34,7 +34,7 @@ pub(super) fn create_device_local_buffer<T: Copy + 'static>(
 		cpumap.copy_from_slice(data);
 		allocator.unmap_memory(&cpualloc).unwrap();
 
-		let ci = ash::vk::BufferCreateInfo::builder().size(size).usage(usage | vk::BufferUsageFlags::TRANSFER_DST);
+		let ci = vk::BufferCreateInfo::builder().size(size).usage(usage | vk::BufferUsageFlags::TRANSFER_DST);
 		let aci = AllocationCreateInfo { usage: MemoryUsage::CpuOnly, ..Default::default() };
 		let (buf, allocation, _) = allocator.create_buffer(&ci, &aci).unwrap();
 
