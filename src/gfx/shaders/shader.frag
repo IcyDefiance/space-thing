@@ -12,7 +12,7 @@ layout(binding = 1) uniform sampler3D mats;
 
 const vec2 iResolution = vec2(1440.0, 810.0);
 const float ViewDistance = 256.0;
-const vec3 AmbientLight = vec3(0.5, 0.5, 0.5);
+const vec3 AmbientLight = vec3(0.25, 0.5, 0.75);
 const float MinStepSize = 0.01;
 const float GridSize = 0.25;
 const vec2 AOSize = vec2(2.0, GridSize * GridSize);
@@ -109,7 +109,11 @@ void main() {
 		if (t > ViewDistance) break;
 	}
 	float dInside = F(pos + dir * t);
-	if (isnan(dInside) || abs(dInside) > GridSize) discard;
+	if (isnan(dInside) || abs(dInside) > GridSize) {
+		//discard;
+		out_color=vec4(AmbientLight, 0.0);
+		return;
+	}
 	float dOutside = F(pos + dir * (t - GridSize));
 	t += GridSize * dInside / (dOutside - dInside);
 	pos += dir * t;
