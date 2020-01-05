@@ -11,7 +11,7 @@ layout(binding = 0) uniform sampler3D voxels;
 layout(binding = 1) uniform sampler3D mats;
 
 const vec2 iResolution = vec2(1440.0, 810.0);
-const float ViewDistance = 1000.0;
+const float ViewDistance = 256.0;
 const vec3 AmbientLight = vec3(0.5, 0.5, 0.5);
 const float MinStepSize = 0.01;
 const float GridSize = 0.25;
@@ -63,17 +63,6 @@ vec3 tonemap(vec3 color) {
 	return sqrt(color);
 }
 
-#if AOQuality == 0
-float ao(vec3 p, vec3 n) {
-	float dist = 0.618;
-	float occ = 1.0;
-	for (int i=0;i<4;i++) {
-		occ = min(occ, F(p + dist * n) / dist);
-		dist *= 2.0;
-	}
-	return max(occ, 0.0);
-}
-#else
 float hash(float p) {
 	p = fract(p * sqrt(5.0)) + sqrt(6.0);
 	return fract(p * sqrt(7.0));
@@ -105,7 +94,6 @@ float ao(vec3 p, vec3 n) {
 	ao = clamp(1.0 - 2.0 * ao * Qi / AOSize, 0.0, 1.0);
 	return ao.x * sqrt(ao.y);
 }
-#endif
 
 void main() {
 	vec3 dir = quat_mul(cam_rot, normalize(vec3(
@@ -131,7 +119,8 @@ void main() {
 		if (abs(d) < tiny) break;
 	}
 
-	const float k = 0.01; //0.125
+	const float smoothness = 0.0;
+	float k = mix(tiny * 8.0, GridSize * 0.5, smoothness);
 	//vec3 nor = normalize(k.xyy*F(pos + k.xyy) + k.yyx*F(pos + k.yyx) + k.yxy*F(pos + k.yxy) + k.xxx*F(pos + k.xxx));
 	vec3 nor = normalize(vec3(
 		F(pos + vec3(k, 0.0, 0.0)) - F(pos - vec3(k, 0.0, 0.0)),
