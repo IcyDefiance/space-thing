@@ -1,31 +1,45 @@
 #version 450
+#define USE_VULKAN
+//#version 130
 
 //#define IterationDebugView
-#define RayIntersectQuality 1024
-#define RayRefineQuality 1024
-#define ShadowQuality 1024
-#define AOQuality 32
 
+#ifdef USE_VULKAN
 layout(location = 0) out vec4 out_color;
-
 layout(binding = 0) uniform sampler3D voxels;
 layout(binding = 1) uniform sampler3D mats;
-layout(binding = 1) uniform sampler2D blocks;
+layout(binding = 2) uniform sampler2D blocks;
 
 layout(push_constant) uniform PushConsts {
 	vec3 cam_pos;
 	vec4 cam_rot;
 } pc;
-
 const vec2 iResolution = vec2(1440.0, 810.0);
+#define CAMROT pc.cam_rot
+#define CAMPOS pc.cam_pos
+#define PIXOUT out_color
+#else
+uniform sampler3D voxels;
+uniform sampler3D mats;
+uniform vec3 cam_pos;
+uniform vec4 cam_rot;
+uniform vec2 iResolution;
+#define CAMROT cam_rot
+#define CAMPOS cam_pos
+#define PIXOUT gl_FragColor
+#endif
+
+#define RayIntersectQuality 1024
+#define RayRefineQuality 256
+#define ShadowQuality 256
+#define AOQuality 32
+
 const float ViewDistance = 256.0;
 const vec3 AmbientLight = vec3(0.25, 0.5, 0.75);
 const float MinStepSize = 0.01;
 const float GridSize = 0.25;
 const vec2 AOSize = vec2(2.0, GridSize * GridSize);
 const float tiny = 0.001;
-
-const vec4 cam_proj = vec4(0.5625, 1.0, -1.002002, -1.001001);
 
 vec3 quat_mul(vec4 quat, vec3 vec) {
 	return cross(quat.xyz, cross(quat.xyz, vec) + vec * quat.w) * 2.0 + vec;
@@ -51,7 +65,7 @@ vec2 shadowRay(vec3 pos, vec3 dir) {
 #else
 float shadowRay(vec3 pos, vec3 dir) {
 #endif
-	const float sharpness = 16.0;
+	const float sharpness = 13.0;
 	float s = 1.0;
 	float t = GridSize * GridSize;
 	float ph = tiny;
@@ -135,11 +149,20 @@ void main() {
 #ifdef IterationDebugView
 	float iters = 0.0;
 #endif
-	vec3 dir = quat_mul(pc.cam_rot, normalize(vec3(
+#ifdef USE_VULKAN
+	vec3 dir = quat_mul(CAMROT, normalize(vec3(
 		(2.0*gl_FragCoord.x - iResolution.x) / iResolution.y,
 		1.0,
-		1.0 - 2.0*gl_FragCoord.y/iResolution.y)));
-	vec3 pos = pc.cam_pos;
+		1.0 - 2.0*gl_FragCoord.y / iResolution.y
+	)));
+#else
+	vec3 dir = quat_mul(CAMROT, normalize(vec3(
+		(2.0*gl_FragCoord.x - iResolution.x) / iResolution.y,
+		1.0,
+		1.0 - 2.0*(iResolution.y - gl_FragCoord.y) / iResolution.y
+	)));
+#endif
+	vec3 pos = CAMPOS;
 	float t = tiny;
 	for(int i=0;i<RayIntersectQuality;i++) {
 		float d = F(pos + dir * t);
@@ -157,7 +180,7 @@ void main() {
 #else
 	if (miss) {
 		//discard;
-		out_color=vec4(AmbientLight, 0.0);
+		PIXOUT = vec4(AmbientLight, 0.0);
 		return;
 	}
 #endif
@@ -220,25 +243,15 @@ void main() {
     const float band3 = 1024.0;
     if (iters > band2) {
         float ss = smoothstep(band2, band3, iters);
-        out_color = vec4(mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), ss), 0.0);
+        PIXOUT = vec4(mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), ss), 0.0);
     } else if (iters > band1) {
         float ss = smoothstep(band1, band2, iters);
-        out_color = vec4(mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), ss), 0.0);
+        PIXOUT = vec4(mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), ss), 0.0);
     } else {
 		float ss = smoothstep(0.0, band1, iters);
-        out_color = vec4(mix(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), ss), 0.0);
+        PIXOUT = vec4(mix(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), ss), 0.0);
     }
-	/*
-    if (gl_FragCoord.x < iResolution.x/2.0 - 32.0) {
-        out_color = vec4(tonemap(color * light), 0.0);
-        if (miss) {
-			//discard;
-			out_color=vec4(AmbientLight, 0.0);
-			return;
-		}
-    }
-	*/
 #else
-	out_color = vec4(tonemap(color * light), 0.0);
+	PIXOUT = vec4(tonemap(color * light), 0.0);
 #endif
 }
