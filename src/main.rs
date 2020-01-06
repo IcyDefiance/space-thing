@@ -4,11 +4,11 @@ mod threads;
 
 use futures::executor::block_on;
 use gfx::{camera::Camera, window::Window, world::World, Gfx};
-use nalgebra::{zero, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{zero, Vector2, Vector3};
 use simplelog::{LevelFilter, SimpleLogger};
 use std::{collections::HashSet, time::Instant};
 use winit::{
-	event::{DeviceEvent, ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
+	event::{DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent},
 	event_loop::{ControlFlow, EventLoop},
 };
 
@@ -23,6 +23,8 @@ async fn amain() {
 
 	let event_loop = EventLoop::new();
 	let mut window = Window::new(gfx.clone(), &event_loop);
+	window.winit().set_cursor_grab(true).unwrap();
+	window.winit().set_cursor_visible(false);
 
 	let world = World::new(gfx);
 	let mut camera = Camera::new();
@@ -31,6 +33,7 @@ async fn amain() {
 
 	let mut keys = HashSet::new();
 	let mut rotation: Vector2<f32> = [0.0, 0.0].into();
+	let mut grab = true;
 
 	let mut time = Instant::now();
 	let mut delta = time.elapsed();
@@ -55,11 +58,25 @@ async fn amain() {
 			},
 			Event::WindowEvent { event, .. } => match event {
 				WindowEvent::CloseRequested => *control = ControlFlow::Exit,
-				WindowEvent::KeyboardInput { input: KeyboardInput { virtual_keycode, .. }, .. } => {
-					match virtual_keycode {
-						Some(VirtualKeyCode::Escape) => *control = ControlFlow::Exit,
-						_ => (),
-					}
+				WindowEvent::KeyboardInput {
+					input: KeyboardInput { virtual_keycode, state: ElementState::Pressed, .. },
+					..
+				} => match virtual_keycode {
+					Some(VirtualKeyCode::Escape) => {
+						if grab {
+							grab = false;
+							window.winit().set_cursor_grab(false).unwrap();
+							window.winit().set_cursor_visible(true);
+						} else {
+							*control = ControlFlow::Exit;
+						}
+					},
+					_ => (),
+				},
+				WindowEvent::MouseInput { button: MouseButton::Left, .. } => {
+					grab = true;
+					window.winit().set_cursor_grab(true).unwrap();
+					window.winit().set_cursor_visible(false);
 				},
 				_ => (),
 			},
@@ -72,15 +89,18 @@ async fn amain() {
 				let mut movement = Vector3::from([
 					(keys.contains(&VirtualKeyCode::D) as i32 - keys.contains(&VirtualKeyCode::A) as i32) as f32,
 					(keys.contains(&VirtualKeyCode::W) as i32 - keys.contains(&VirtualKeyCode::S) as i32) as f32,
-					(keys.contains(&VirtualKeyCode::Space) as i32 - keys.contains(&VirtualKeyCode::LShift) as i32) as f32,
+					(keys.contains(&VirtualKeyCode::Space) as i32 - keys.contains(&VirtualKeyCode::LShift) as i32)
+						as f32,
 				]);
 				movement *= delta.as_secs_f32() * speed;
 
 				let mouse_sensitivity = 0.005;
 				rotation *= mouse_sensitivity;
 
-				camera.look(rotation.x, rotation.y);
-				camera.pos += camera.rot * movement;
+				if grab {
+					camera.look(rotation.x, rotation.y);
+					camera.pos += camera.rot * movement;
+				}
 
 				rotation = zero();
 

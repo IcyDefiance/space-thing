@@ -259,6 +259,10 @@ impl Window {
 		}
 	}
 
+	pub fn winit(&self) -> &winit::window::Window {
+		&self.window
+	}
+
 	fn recreate_swapchain(&mut self) {
 		unsafe {
 			self.gfx
