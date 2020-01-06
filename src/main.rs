@@ -23,8 +23,7 @@ async fn amain() {
 
 	let event_loop = EventLoop::new();
 	let mut window = Window::new(gfx.clone(), &event_loop);
-	window.winit().set_cursor_grab(true).unwrap();
-	window.winit().set_cursor_visible(false);
+	grab_cursor(&window, true);
 
 	let world = World::new(gfx);
 	let mut camera = Camera::new();
@@ -33,7 +32,7 @@ async fn amain() {
 
 	let mut keys = HashSet::new();
 	let mut rotation: Vector2<f32> = [0.0, 0.0].into();
-	let mut grab = true;
+	let mut controls = true;
 
 	let mut time = Instant::now();
 	let mut delta = time.elapsed();
@@ -58,15 +57,18 @@ async fn amain() {
 			},
 			Event::WindowEvent { event, .. } => match event {
 				WindowEvent::CloseRequested => *control = ControlFlow::Exit,
+				WindowEvent::Focused(false) => {
+					controls = false;
+					grab_cursor(&window, false);
+				},
 				WindowEvent::KeyboardInput {
 					input: KeyboardInput { virtual_keycode, state: ElementState::Pressed, .. },
 					..
 				} => match virtual_keycode {
 					Some(VirtualKeyCode::Escape) => {
-						if grab {
-							grab = false;
-							window.winit().set_cursor_grab(false).unwrap();
-							window.winit().set_cursor_visible(true);
+						if controls {
+							controls = false;
+							grab_cursor(&window, false);
 						} else {
 							*control = ControlFlow::Exit;
 						}
@@ -74,9 +76,8 @@ async fn amain() {
 					_ => (),
 				},
 				WindowEvent::MouseInput { button: MouseButton::Left, .. } => {
-					grab = true;
-					window.winit().set_cursor_grab(true).unwrap();
-					window.winit().set_cursor_visible(false);
+					controls = true;
+					grab_cursor(&window, true);
 				},
 				_ => (),
 			},
@@ -97,7 +98,7 @@ async fn amain() {
 				let mouse_sensitivity = 0.005;
 				rotation *= mouse_sensitivity;
 
-				if grab {
+				if controls {
 					camera.look(rotation.x, rotation.y);
 					camera.pos += camera.rot * movement;
 				}
@@ -109,4 +110,10 @@ async fn amain() {
 			_ => (),
 		};
 	});
+}
+
+fn grab_cursor(window: &Window, grab: bool) {
+	let winit = window.winit();
+	winit.set_cursor_grab(grab).unwrap();
+	winit.set_cursor_visible(!grab);
 }
