@@ -4,7 +4,10 @@ pub mod image;
 pub mod window;
 pub mod world;
 
-use crate::{fs::read_bytes, gfx::camera::Camera};
+use crate::{
+	fs::read_bytes,
+	gfx::{buffer::create_cpu_buffer, camera::Camera, image::create_device_local_image},
+};
 use ash::{
 	extensions::khr,
 	version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
@@ -42,12 +45,16 @@ pub struct Gfx {
 	mats_sampler: vk::Sampler,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
+	blocks: vk::Image,
+	blocks_alloc: Allocation,
+	blocks_view: vk::ImageView,
 }
 impl Gfx {
 	pub async fn new() -> Arc<Self> {
 		// start reading files now to use later
 		let vert_spv = read_bytes("build/shader.vert.spv");
 		let frag_spv = read_bytes("build/shader.frag.spv");
+		let blocks_data = read_bytes("build/shader.frag.spv");
 
 		let entry = Entry::new().unwrap();
 
@@ -127,6 +134,12 @@ impl Gfx {
 				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
 				.immutable_samplers(&[mats_sampler])
 				.build(),
+			vk::DescriptorSetLayoutBinding::builder()
+				.binding(2)
+				.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
+				.immutable_samplers(&[voxels_sampler])
+				.build(),
 		];
 		let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
 		let desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
@@ -166,6 +179,24 @@ impl Gfx {
 		let vshader = create_shader(&device, &vert_spv.await.unwrap());
 		let fshader = create_shader(&device, &frag_spv.await.unwrap());
 
+		let blocks_data = blocks_data.await.unwrap();
+		let (blocks_cpu, blocks_cpualloc, blocks_cpumap) = create_cpu_buffer::<u8>(&allocator, blocks_data.len());
+		blocks_cpumap.copy_from_slice(&blocks_data);
+		let extent = (blocks_data.len() as f32).sqrt() as u32;
+		let (blocks, blocks_alloc, blocks_view) = create_device_local_image(
+			&device,
+			queue,
+			&allocator,
+			cmdpool_transient,
+			vk::ImageType::TYPE_2D,
+			vk::Format::R8G8B8A8_UNORM,
+			vk::Extent3D::builder().width(extent).height(extent).depth(1).build(),
+			vk::ImageUsageFlags::SAMPLED,
+			blocks_cpu,
+		);
+		unsafe { device.destroy_buffer(blocks_cpu, None) };
+		allocator.free_memory(&blocks_cpualloc).unwrap();
+
 		Arc::new(Self {
 			_entry: entry,
 			instance,
@@ -192,12 +223,18 @@ impl Gfx {
 			mats_sampler,
 			vshader,
 			fshader,
+			blocks,
+			blocks_alloc,
+			blocks_view,
 		})
 	}
 }
 impl Drop for Gfx {
 	fn drop(&mut self) {
 		unsafe {
+			self.device.destroy_image_view(self.blocks_view, None);
+			self.device.destroy_image(self.blocks, None);
+			self.allocator.free_memory(&self.blocks_alloc).unwrap();
 			self.device.destroy_shader_module(self.fshader, None);
 			self.device.destroy_shader_module(self.vshader, None);
 			self.device.destroy_buffer(self.triangle, None);

@@ -14,7 +14,6 @@ pub(super) fn create_device_local_image(
 ) -> (vk::Image, Allocation, vk::ImageView) {
 	unsafe {
 		let ci = ash::vk::ImageCreateInfo::builder()
-			.image_type(vk::ImageType::TYPE_3D)
 			.image_type(image_type)
 			.format(format)
 			.extent(extent)
@@ -57,17 +56,19 @@ pub(super) fn create_device_local_image(
 		let submits = [vk::SubmitInfo::builder().command_buffers(&[cmd]).build()];
 		device.queue_submit(queue, &submits, fence).unwrap();
 
-		let ci = vk::ImageViewCreateInfo::builder()
-			.image(image)
-			.view_type(vk::ImageViewType::TYPE_3D)
-			.format(format)
-			.subresource_range(
-				vk::ImageSubresourceRange::builder()
-					.aspect_mask(vk::ImageAspectFlags::COLOR)
-					.level_count(1)
-					.layer_count(1)
-					.build(),
-			);
+		let view_type = match image_type {
+			vk::ImageType::TYPE_1D => vk::ImageViewType::TYPE_1D,
+			vk::ImageType::TYPE_2D => vk::ImageViewType::TYPE_2D,
+			vk::ImageType::TYPE_3D => vk::ImageViewType::TYPE_3D,
+			_ => unreachable!(),
+		};
+		let ci = vk::ImageViewCreateInfo::builder().image(image).view_type(view_type).format(format).subresource_range(
+			vk::ImageSubresourceRange::builder()
+				.aspect_mask(vk::ImageAspectFlags::COLOR)
+				.level_count(1)
+				.layer_count(1)
+				.build(),
+		);
 		let image_view = device.create_image_view(&ci, None).unwrap();
 
 		device.wait_for_fences(&[fence], false, !0).unwrap();

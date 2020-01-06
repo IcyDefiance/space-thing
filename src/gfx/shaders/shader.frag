@@ -10,6 +10,7 @@ layout(location = 0) out vec4 out_color;
 
 layout(binding = 0) uniform sampler3D voxels;
 layout(binding = 1) uniform sampler3D mats;
+layout(binding = 1) uniform sampler2D blocks;
 
 layout(push_constant) uniform PushConsts {
 	vec3 cam_pos;

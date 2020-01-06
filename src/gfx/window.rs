@@ -169,6 +169,10 @@ impl Window {
 				.image_view(world.mats_view)
 				.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
 				.build()];
+			let blocks_info = [vk::DescriptorImageInfo::builder()
+				.image_view(self.gfx.blocks_view)
+				.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+				.build()];
 			let write = [
 				vk::WriteDescriptorSet::builder()
 					.dst_set(desc_set)
@@ -181,6 +185,12 @@ impl Window {
 					.dst_binding(1)
 					.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
 					.image_info(&mats_info)
+					.build(),
+				vk::WriteDescriptorSet::builder()
+					.dst_set(desc_set)
+					.dst_binding(2)
+					.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+					.image_info(&blocks_info)
 					.build(),
 			];
 			self.gfx.device.update_descriptor_sets(&write, &[]);
@@ -523,7 +533,7 @@ fn create_framebuffers(
 fn create_desc_pool(gfx: &Gfx, max_sets: u32) -> (vk::DescriptorPool, Vec<vk::DescriptorSet>) {
 	let pool_sizes = [vk::DescriptorPoolSize::builder()
 		.ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-		.descriptor_count(max_sets * 2)
+		.descriptor_count(max_sets * 3)
 		.build()];
 	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(max_sets).pool_sizes(&pool_sizes);
 	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
