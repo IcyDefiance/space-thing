@@ -93,49 +93,29 @@ impl Drop for World {
 	}
 }
 
+fn sdCube(x: f32, y: f32, z: f32) -> f32 {
+	let qx = x.abs() - 0.5;
+    let qy = y.abs() - 0.5;
+    let qz = z.abs() - 0.5;
+    let l2 = qx*qx.max(0.0) + qy*qy.max(0.0) + qz*qz.max(0.0);
+    return l2.sqrt() + qx.max(qy.max(qz)).min(0.0);
+}
+
 fn init_voxels(voxels: &mut [u8]) {
 	let resf = RES as f32;
 
 	for z in 0..(256 * RES) {
 		for y in 0..(16 * RES) {
 			for x in 0..(16 * RES) {
-				let px = (x as f32) / resf - 8.0;
-				let py = (y as f32) / resf - 8.0;
-				let pz = (z as f32) / resf - 128.0;
-				let mut sd = pz;
+				let mut px = (x as f32) / resf;
+				let mut py = (y as f32) / resf;
+				let mut pz = (z as f32) / resf;
 
-				// sphere
-				let mut cd = (px * px + py * py + (pz - 3.5) * (pz - 3.5)).sqrt() - 0.5;
-				if cd < sd {
-					sd = cd;
-				}
-
-				// box
-				let mut qx = px.abs() - 0.5;
-				let mut qy = py.abs() - 0.5;
-				let mut qz = (pz - 0.5).abs() - 0.5;
-				cd = (qx * qx.max(0.0) + qy * qy.max(0.0) + qz * qz.max(0.0)).sqrt() + qx.max(qy.max(qz)).min(0.0);
-				if cd < sd {
-					sd = cd;
-				}
-
-				// box
-				qx = px.abs() - 0.5 * 0.618;
-				qy = py.abs() - 0.5 * 0.618;
-				qz = (pz - 1.5).abs() - 0.5;
-				cd = (qx * qx.max(0.0) + qy * qy.max(0.0) + qz * qz.max(0.0)).sqrt() + qx.max(qy.max(qz)).min(0.0);
-				if cd < sd {
-					sd = cd;
-				}
-
-				// box
-				qx = px.abs() - 0.5;
-				qy = py.abs() - 0.5;
-				qz = (pz - 2.5).abs() - 0.5;
-				cd = (qx * qx.max(0.0) + qy * qy.max(0.0) + qz * qz.max(0.0)).sqrt() + qx.max(qy.max(qz)).min(0.0);
-				if cd < sd {
-					sd = cd;
-				}
+				let mut sd = pz - 1.0;
+				sd = sd.min(sdCube(px-5.5, py-2.5, pz-8.5));
+				sd = sd.min(sdCube(px-3.5, py-2.5, pz-8.5));
+				sd = sd.min(sdCube(px-2.5, py-2.5, pz-8.5));
+				sd = sd.min(sdCube(px-3.5, py-3.5, pz-8.5));
 
 				let d = 255.0 * (sd + 1.0) / (RANGE + 1.0);
 				voxels[x + y * 16 * RES + z * 16 * 16 * RES * RES] = (d.round() as i64).max(0).min(255) as u8;

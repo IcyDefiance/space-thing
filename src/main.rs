@@ -27,7 +27,8 @@ async fn amain() {
 
 	let world = World::new(gfx);
 	let mut camera = Camera::new();
-	camera.pos = [0.0, -4.0, 1.618].into();
+	camera.pos = [8.0, 8.0, 8.0].into();
+	camera.yaw = 3.14159;
 	println!("{:?}", camera.rot);
 
 	let mut keys = HashSet::new();
