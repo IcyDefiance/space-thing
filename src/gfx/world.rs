@@ -46,7 +46,7 @@ impl World {
 		);
 
 		let (mats_cpu, mats_cpualloc, mats_cpumap) = create_cpu_buffer::<u8>(&gfx.allocator, chunk_size as _);
-		unsafe { write_bytes(mats_cpumap.as_mut_ptr(), 0, mats_cpumap.len()) };
+		unsafe { write_bytes(mats_cpumap.as_mut_ptr(), 1, mats_cpumap.len()) };
 		let (mats, mats_alloc, mats_view) = create_device_local_image(
 			&gfx.device,
 			gfx.queue,
@@ -139,10 +139,10 @@ impl Drop for World {
 
 fn sdCube(x: f32, y: f32, z: f32) -> f32 {
 	let qx = x.abs() - 0.5;
-    let qy = y.abs() - 0.5;
-    let qz = z.abs() - 0.5;
-    let l2 = qx*qx.max(0.0) + qy*qy.max(0.0) + qz*qz.max(0.0);
-    return l2.sqrt() + qx.max(qy.max(qz)).min(0.0);
+	let qy = y.abs() - 0.5;
+	let qz = z.abs() - 0.5;
+	let l2 = qx * qx.max(0.0) + qy * qy.max(0.0) + qz * qz.max(0.0);
+	return l2.sqrt() + qx.max(qy.max(qz)).min(0.0);
 }
 
 fn init_voxels(voxels: &mut [u8]) {
@@ -156,10 +156,10 @@ fn init_voxels(voxels: &mut [u8]) {
 				let mut pz = (z as f32) / resf;
 
 				let mut sd = pz - 1.0;
-				sd = sd.min(sdCube(px-5.5, py-2.5, pz-8.5));
-				sd = sd.min(sdCube(px-3.5, py-2.5, pz-8.5));
-				sd = sd.min(sdCube(px-2.5, py-2.5, pz-8.5));
-				sd = sd.min(sdCube(px-3.5, py-3.5, pz-8.5));
+				sd = sd.min(sdCube(px - 5.5, py - 2.5, pz - 8.5));
+				sd = sd.min(sdCube(px - 3.5, py - 2.5, pz - 8.5));
+				sd = sd.min(sdCube(px - 2.5, py - 2.5, pz - 8.5));
+				sd = sd.min(sdCube(px - 3.5, py - 3.5, pz - 8.5));
 
 				let d = 255.0 * (sd + 1.0) / (RANGE + 1.0);
 				voxels[x + y * 16 * RES + z * 16 * 16 * RES * RES] = (d.round() as i64).max(0).min(255) as u8;

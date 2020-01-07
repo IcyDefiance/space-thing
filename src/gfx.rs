@@ -55,7 +55,7 @@ impl Gfx {
 		// start reading files now to use later
 		let vert_spv = read_bytes("build/shader.vert.spv");
 		let frag_spv = read_bytes("build/shader.frag.spv");
-		let blocks_data = read_bytes("build/shader.frag.spv");
+		let blocks_data = read_bytes("assets/textures.layer1.data");
 
 		let entry = Entry::new().unwrap();
 
@@ -183,15 +183,14 @@ impl Gfx {
 		let blocks_data = blocks_data.await.unwrap();
 		let (blocks_cpu, blocks_cpualloc, blocks_cpumap) = create_cpu_buffer::<u8>(&allocator, blocks_data.len());
 		blocks_cpumap.copy_from_slice(&blocks_data);
-		let extent = (blocks_data.len() as f32).sqrt() as u32;
 		let (blocks, blocks_alloc, blocks_view) = create_device_local_image(
 			&device,
 			queue,
 			&allocator,
 			cmdpool_transient,
 			vk::ImageType::TYPE_2D,
-			vk::Format::R8G8B8A8_UNORM,
-			vk::Extent3D::builder().width(extent).height(extent).depth(1).build(),
+			vk::Format::R8G8B8A8_SRGB,
+			vk::Extent3D::builder().width(4096).height(512).depth(1).build(),
 			vk::ImageUsageFlags::SAMPLED,
 			blocks_cpu,
 		);

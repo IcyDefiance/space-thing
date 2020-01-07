@@ -29,7 +29,6 @@ async fn amain() {
 	let mut camera = Camera::new();
 	camera.pos = [8.0, 8.0, 8.0].into();
 	camera.yaw = 3.14159;
-	println!("{:?}", camera.rot);
 
 	let mut keys = HashSet::new();
 	let mut rotation: Vector2<f32> = [0.0, 0.0].into();
