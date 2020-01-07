@@ -1,6 +1,7 @@
 pub mod buffer;
 pub mod camera;
 pub mod image;
+pub mod math;
 pub mod window;
 pub mod world;
 

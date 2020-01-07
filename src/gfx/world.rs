@@ -1,6 +1,7 @@
-use crate::gfx::{buffer::create_cpu_buffer, image::create_device_local_image, Gfx};
+use crate::gfx::{buffer::create_cpu_buffer, image::create_device_local_image, math::lerp, Gfx};
 use ash::{version::DeviceV1_0, vk};
-use std::{ptr::write_bytes, sync::Arc};
+use nalgebra::Vector3;
+use std::{mem::transmute, ptr::write_bytes, sync::Arc};
 use vk_mem::Allocation;
 
 const RES: usize = 4;
@@ -11,14 +12,14 @@ pub struct World {
 
 	voxels_cpu: vk::Buffer,
 	voxels_cpualloc: Allocation,
-	voxels_cpumap: &'static mut [u8],
+	voxels_cpumap: &'static mut [[[u8; 256]; 16]; 16],
 	voxels: vk::Image,
 	voxels_alloc: Allocation,
 	pub voxels_view: vk::ImageView,
 
 	mats_cpu: vk::Buffer,
 	mats_cpualloc: Allocation,
-	mats_cpumap: &'static mut [u8],
+	mats_cpumap: &'static mut [[[u8; 256]; 16]; 16],
 	mats: vk::Image,
 	mats_alloc: Allocation,
 	pub mats_view: vk::ImageView,
@@ -62,17 +63,60 @@ impl World {
 			gfx,
 			voxels_cpu,
 			voxels_cpualloc,
-			voxels_cpumap,
+			voxels_cpumap: unsafe { transmute(voxels_cpumap.as_mut_ptr()) },
 			voxels,
 			voxels_alloc,
 			voxels_view,
 			mats_cpu,
 			mats_cpualloc,
-			mats_cpumap,
+			mats_cpumap: unsafe { transmute(mats_cpumap.as_mut_ptr()) },
 			mats,
 			mats_alloc,
 			mats_view,
 		}
+	}
+
+	/// assumes dir is normalized
+	pub fn sphere_sweep(&self, start: Vector3<f32>, dir: Vector3<f32>, len: f32, radius: f32) -> f32 {
+		let collide = 0.01;
+		let mut dist = 0.0;
+		while dist < len {
+			let march = self.sample(start + dir * dist) - radius;
+			if march < collide {
+				break;
+			}
+
+			dist += march;
+		}
+		dist
+	}
+
+	fn sample(&self, pos: Vector3<f32>) -> f32 {
+		let (x, y, z) = (pos.x as usize, pos.y as usize, pos.z as usize);
+		let (tx, ty, tz) = (pos.x - x as f32, pos.y - y as f32, pos.z - z as f32);
+
+		let c000 = self.sample_exact(x, y, z);
+		let c001 = self.sample_exact(x, y, z + 1);
+		let c010 = self.sample_exact(x, y + 1, z);
+		let c011 = self.sample_exact(x, y + 1, z + 1);
+		let c100 = self.sample_exact(x + 1, y, z);
+		let c101 = self.sample_exact(x + 1, y, z + 1);
+		let c110 = self.sample_exact(x + 1, y + 1, z);
+		let c111 = self.sample_exact(x + 1, y + 1, z + 1);
+
+		let c00 = lerp(c000, c100, tx);
+		let c01 = lerp(c001, c101, tx);
+		let c10 = lerp(c010, c110, tx);
+		let c11 = lerp(c011, c111, tx);
+
+		let c0 = lerp(c00, c10, ty);
+		let c1 = lerp(c01, c11, ty);
+
+		lerp(c0, c1, tz)
+	}
+
+	fn sample_exact(&self, x: usize, y: usize, z: usize) -> f32 {
+		self.voxels_cpumap[x][y][z] as f32 / 64.0 + 2.0
 	}
 }
 impl Drop for World {
