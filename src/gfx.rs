@@ -121,6 +121,13 @@ impl Gfx {
 			.address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
 			.address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
 		let mats_sampler = unsafe { device.create_sampler(&ci, None) }.unwrap();
+		let ci = vk::SamplerCreateInfo::builder()
+			.mag_filter(vk::Filter::LINEAR)
+			.min_filter(vk::Filter::LINEAR)
+			.address_mode_u(vk::SamplerAddressMode::REPEAT)
+			.address_mode_v(vk::SamplerAddressMode::REPEAT)
+			.address_mode_w(vk::SamplerAddressMode::REPEAT);
+		let blocks_sampler = unsafe { device.create_sampler(&ci, None) }.unwrap();
 
 		let bindings = [
 			vk::DescriptorSetLayoutBinding::builder()
@@ -139,7 +146,7 @@ impl Gfx {
 				.binding(2)
 				.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
 				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
-				.immutable_samplers(&[voxels_sampler])
+				.immutable_samplers(&[blocks_sampler])
 				.build(),
 		];
 		let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);

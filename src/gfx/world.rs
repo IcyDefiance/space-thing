@@ -1,4 +1,9 @@
-use crate::gfx::{buffer::create_cpu_buffer, image::create_device_local_image, math::lerp, Gfx};
+use crate::gfx::{
+	buffer::create_cpu_buffer,
+	image::create_device_local_image,
+	math::{lerp, v3max},
+	Gfx,
+};
 use ash::{version::DeviceV1_0, vk};
 use nalgebra::Vector3;
 use std::{mem::transmute, ptr::write_bytes, sync::Arc};
@@ -53,7 +58,7 @@ impl World {
 			&gfx.allocator,
 			gfx.cmdpool_transient,
 			vk::ImageType::TYPE_3D,
-			vk::Format::R8_UINT,
+			vk::Format::R8_UNORM,
 			chunk_extent,
 			vk::ImageUsageFlags::SAMPLED,
 			mats_cpu,
@@ -92,6 +97,7 @@ impl World {
 	}
 
 	fn sample(&self, pos: Vector3<f32>) -> f32 {
+		let pos = v3max((pos * 4.0).add_scalar(-0.5), 0.0);
 		let (x, y, z) = (pos.x as usize, pos.y as usize, pos.z as usize);
 		let (tx, ty, tz) = (pos.x - x as f32, pos.y - y as f32, pos.z - z as f32);
 
@@ -116,7 +122,7 @@ impl World {
 	}
 
 	fn sample_exact(&self, x: usize, y: usize, z: usize) -> f32 {
-		self.voxels_cpumap[x][y][z] as f32 / 64.0 + 2.0
+		(RANGE + 1.0) * (self.voxels_cpumap[x][y][z] as f32) / 255.0 - 1.0
 	}
 }
 impl Drop for World {
