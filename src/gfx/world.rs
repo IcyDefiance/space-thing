@@ -49,7 +49,7 @@ impl World {
 			vk::Format::R8_UNORM,
 			chunk_extent,
 			false,
-			vk::ImageUsageFlags::SAMPLED,
+			vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
 			voxels_cpu,
 		);
 

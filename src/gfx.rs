@@ -312,6 +312,7 @@ fn create_stencil_pipeline(
 	let bindings = [vk::DescriptorSetLayoutBinding::builder()
 		.binding(0)
 		.descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+		.descriptor_count(1)
 		.stage_flags(vk::ShaderStageFlags::COMPUTE)
 		.build()];
 	let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);

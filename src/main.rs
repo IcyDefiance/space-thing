@@ -26,6 +26,8 @@ async fn amain() {
 	grab_cursor(&window, true);
 
 	let mut world = World::new(gfx);
+	world.set_block([0, 0, 5].into());
+
 	let mut camera = Camera::new();
 	camera.pos = [8.0, 8.0, 8.0].into();
 	camera.yaw = 3.14159;

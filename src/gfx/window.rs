@@ -170,7 +170,7 @@ impl Window {
 
 			let voxels_out_info = [vk::DescriptorImageInfo::builder()
 				.image_view(world.voxels_view)
-				.image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+				.image_layout(vk::ImageLayout::GENERAL)
 				.build()];
 			let voxels_info = [vk::DescriptorImageInfo::builder()
 				.image_view(world.voxels_view)
@@ -262,7 +262,7 @@ impl Window {
 					world.voxels,
 					1,
 					vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-					vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+					vk::ImageLayout::GENERAL,
 					vk::PipelineStageFlags::FRAGMENT_SHADER,
 					vk::PipelineStageFlags::COMPUTE_SHADER,
 				);
@@ -287,14 +287,14 @@ impl Window {
 					&[stencil_desc_set],
 					&[],
 				);
-				self.gfx.device.cmd_dispatch(frame_data.primary, 1, 1, 1);
+				self.gfx.device.cmd_dispatch(frame_data.primary, 21, 21, 21);
 
 				transition_layout(
 					&self.gfx.device,
 					frame_data.primary,
 					world.voxels,
 					1,
-					vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+					vk::ImageLayout::GENERAL,
 					vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
 					vk::PipelineStageFlags::COMPUTE_SHADER,
 					vk::PipelineStageFlags::FRAGMENT_SHADER,

@@ -56,7 +56,7 @@ float F(vec3 pos) {
 	d = min(d, sdBox(pos - vec3(2.5,2.5,128.5), vec3(0.5)));
 	d = min(d, sdBox(pos - vec3(3.5,3.5,128.5), vec3(0.5)));
 	//if (gl_FragCoord.x < iResolution.x/2.0) return d;
-	
+
 	const float range = 10.0;
 	const vec3 BlockSize = vec3(16.0, 16.0, 256.0);
 	vec3 tc = (pos + vec3(GridSize * 0.5)) / BlockSize;

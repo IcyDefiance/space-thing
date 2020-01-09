@@ -42,7 +42,7 @@ pub(super) fn create_device_local_image(
 			mip_levels,
 			vk::ImageLayout::UNDEFINED,
 			vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-			vk::PipelineStageFlags::empty(),
+			vk::PipelineStageFlags::TOP_OF_PIPE,
 			vk::PipelineStageFlags::TRANSFER,
 		);
 
@@ -105,14 +105,16 @@ pub(super) unsafe fn transition_layout(
 	dst_stage_mask: vk::PipelineStageFlags,
 ) {
 	let src_access_mask = match old_layout {
+		vk::ImageLayout::GENERAL => vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
 		vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::AccessFlags::SHADER_READ,
 		vk::ImageLayout::TRANSFER_DST_OPTIMAL => vk::AccessFlags::TRANSFER_WRITE,
 		vk::ImageLayout::UNDEFINED => vk::AccessFlags::empty(),
 		_ => unimplemented!(),
 	};
 	let dst_access_mask = match new_layout {
-		vk::ImageLayout::TRANSFER_DST_OPTIMAL => vk::AccessFlags::TRANSFER_WRITE,
+		vk::ImageLayout::GENERAL => vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
 		vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::AccessFlags::SHADER_READ,
+		vk::ImageLayout::TRANSFER_DST_OPTIMAL => vk::AccessFlags::TRANSFER_WRITE,
 		_ => unimplemented!(),
 	};
 
