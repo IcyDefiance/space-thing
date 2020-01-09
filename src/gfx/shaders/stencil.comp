@@ -10,8 +10,7 @@ layout(push_constant) uniform PushConsts {
 } pc;
 
 void main() {
-	// TODO: fancy math stuff
-	float res = imageLoad(voxels, gl_LocalInvocationID);
-
-	imageStore(voxels, gl_LocalInvocationID, res);
+	float res = imageLoad(voxels, ivec3(gl_LocalInvocationID.xyz)).x;
+	// do stuff
+	imageStore(voxels, ivec3(gl_LocalInvocationID.xyz), vec4(res));
 }
