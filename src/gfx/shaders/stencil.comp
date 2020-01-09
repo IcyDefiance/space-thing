@@ -1,0 +1,17 @@
+#version 450
+
+// TODO: replace with specialization constants?
+layout (local_size_x = 21, local_size_y = 21, local_size_z = 21) in;
+
+layout (binding = 1, r8) uniform image3D voxels;
+
+layout(push_constant) uniform PushConsts {
+	uvec3 pos;
+} pc;
+
+void main() {
+	// TODO: fancy math stuff
+	float res = imageLoad(voxels, gl_LocalInvocationID);
+
+	imageStore(voxels, gl_LocalInvocationID, res);
+}

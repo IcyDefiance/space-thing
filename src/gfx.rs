@@ -16,8 +16,13 @@ use ash::{
 };
 use buffer::create_device_local_buffer;
 use memoffset::offset_of;
-use nalgebra::Vector2;
-use std::{ffi::CString, mem::size_of, slice, sync::Arc};
+use nalgebra::{Vector2, Vector3};
+use std::{
+	ffi::{CStr, CString},
+	mem::size_of,
+	slice,
+	sync::Arc,
+};
 use vk_mem::{Allocation, Allocator, AllocatorCreateInfo};
 
 pub struct Gfx {
@@ -46,6 +51,10 @@ pub struct Gfx {
 	mats_sampler: vk::Sampler,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
+	stencil_shader: vk::ShaderModule,
+	stencil_desc_layout: vk::DescriptorSetLayout,
+	stencil_pipeline_layout: vk::PipelineLayout,
+	stencil_pipeline: vk::Pipeline,
 	blocks: vk::Image,
 	blocks_alloc: Allocation,
 	blocks_view: vk::ImageView,
@@ -55,6 +64,7 @@ impl Gfx {
 		// start reading files now to use later
 		let vert_spv = read_bytes("build/shader.vert.spv");
 		let frag_spv = read_bytes("build/shader.frag.spv");
+		let stencil_spv = read_bytes("build/stencil.comp.spv");
 		let blocks_data = read_bytes("assets/textures.layer1.data");
 
 		let entry = Entry::new().unwrap();
@@ -186,6 +196,10 @@ impl Gfx {
 
 		let vshader = create_shader(&device, &vert_spv.await.unwrap());
 		let fshader = create_shader(&device, &frag_spv.await.unwrap());
+		let stencil_shader = create_shader(&device, &stencil_spv.await.unwrap());
+
+		let (stencil_desc_layout, stencil_pipeline_layout, stencil_pipeline) =
+			create_stencil_pipeline(&device, stencil_shader);
 
 		let blocks_data = blocks_data.await.unwrap();
 		let (blocks_cpu, blocks_cpualloc, blocks_cpumap) = create_cpu_buffer::<u8>(&allocator, blocks_data.len());
@@ -198,6 +212,7 @@ impl Gfx {
 			vk::ImageType::TYPE_2D,
 			vk::Format::R8G8B8A8_SRGB,
 			vk::Extent3D::builder().width(4096).height(512).depth(1).build(),
+			true,
 			vk::ImageUsageFlags::SAMPLED,
 			blocks_cpu,
 		);
@@ -230,6 +245,10 @@ impl Gfx {
 			mats_sampler,
 			vshader,
 			fshader,
+			stencil_shader,
+			stencil_desc_layout,
+			stencil_pipeline_layout,
+			stencil_pipeline,
 			blocks,
 			blocks_alloc,
 			blocks_view,
@@ -242,6 +261,9 @@ impl Drop for Gfx {
 			self.device.destroy_image_view(self.blocks_view, None);
 			self.device.destroy_image(self.blocks, None);
 			self.allocator.free_memory(&self.blocks_alloc).unwrap();
+			self.device.destroy_pipeline(self.stencil_pipeline, None);
+			self.device.destroy_pipeline_layout(self.stencil_pipeline_layout, None);
+			self.device.destroy_shader_module(self.stencil_shader, None);
 			self.device.destroy_shader_module(self.fshader, None);
 			self.device.destroy_shader_module(self.vshader, None);
 			self.device.destroy_buffer(self.triangle, None);
@@ -281,6 +303,40 @@ impl TriangleVertex {
 			.offset(offset_of!(Self, pos) as _)
 			.build()]
 	}
+}
+
+fn create_stencil_pipeline(
+	device: &Device,
+	module: vk::ShaderModule,
+) -> (vk::DescriptorSetLayout, vk::PipelineLayout, vk::Pipeline) {
+	let bindings = [vk::DescriptorSetLayoutBinding::builder()
+		.binding(0)
+		.descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+		.stage_flags(vk::ShaderStageFlags::COMPUTE)
+		.build()];
+	let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
+	let desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
+
+	let set_layouts = [desc_layout];
+	let push_constant_ranges = [vk::PushConstantRange::builder()
+		.stage_flags(vk::ShaderStageFlags::COMPUTE)
+		.offset(0)
+		.size(size_of::<Vector3<f32>>() as _)
+		.build()];
+	let ci =
+		vk::PipelineLayoutCreateInfo::builder().set_layouts(&set_layouts).push_constant_ranges(&push_constant_ranges);
+	let layout = unsafe { device.create_pipeline_layout(&ci, None) }.unwrap();
+
+	let name = CStr::from_bytes_with_nul(b"main\0").unwrap();
+	let stage = vk::PipelineShaderStageCreateInfo::builder()
+		.stage(vk::ShaderStageFlags::COMPUTE)
+		.module(module)
+		.name(name)
+		.build();
+	let ci = vk::ComputePipelineCreateInfo::builder().stage(stage).layout(layout).build();
+	let pipeline = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[ci], None) }.unwrap()[0];
+
+	(desc_layout, layout, pipeline)
 }
 
 fn create_shader(device: &Device, code: &[u8]) -> vk::ShaderModule {

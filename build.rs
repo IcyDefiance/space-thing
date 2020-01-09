@@ -7,6 +7,7 @@ use std::{
 
 fn main() {
 	create_dir("build").ok();
+	build_shader("src/gfx/shaders/stencil.comp", "build/stencil.comp.spv", ShaderKind::Compute);
 	build_shader("src/gfx/shaders/shader.vert", "build/shader.vert.spv", ShaderKind::Vertex);
 	build_shader("src/gfx/shaders/shader.frag", "build/shader.frag.spv", ShaderKind::Fragment);
 }

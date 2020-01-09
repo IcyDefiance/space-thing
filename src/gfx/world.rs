@@ -18,16 +18,18 @@ pub struct World {
 	voxels_cpu: vk::Buffer,
 	voxels_cpualloc: Allocation,
 	voxels_cpumap: &'static mut [[[u8; 256]; 16]; 16],
-	voxels: vk::Image,
+	pub(super) voxels: vk::Image,
 	voxels_alloc: Allocation,
-	pub voxels_view: vk::ImageView,
+	pub(super) voxels_view: vk::ImageView,
 
 	mats_cpu: vk::Buffer,
 	mats_cpualloc: Allocation,
 	mats_cpumap: &'static mut [[[u8; 256]; 16]; 16],
-	mats: vk::Image,
+	pub(super) mats: vk::Image,
 	mats_alloc: Allocation,
-	pub mats_view: vk::ImageView,
+	pub(super) mats_view: vk::ImageView,
+
+	pub(super) set_cmds: Vec<Vector3<u32>>,
 }
 impl World {
 	pub fn new(gfx: Arc<Gfx>) -> Self {
@@ -46,6 +48,7 @@ impl World {
 			vk::ImageType::TYPE_3D,
 			vk::Format::R8_UNORM,
 			chunk_extent,
+			false,
 			vk::ImageUsageFlags::SAMPLED,
 			voxels_cpu,
 		);
@@ -60,6 +63,7 @@ impl World {
 			vk::ImageType::TYPE_3D,
 			vk::Format::R8_UNORM,
 			chunk_extent,
+			false,
 			vk::ImageUsageFlags::SAMPLED,
 			mats_cpu,
 		);
@@ -78,7 +82,12 @@ impl World {
 			mats,
 			mats_alloc,
 			mats_view,
+			set_cmds: vec![],
 		}
+	}
+
+	pub fn set_block(&mut self, pos: Vector3<u32>) {
+		self.set_cmds.push(pos);
 	}
 
 	/// assumes dir is normalized
@@ -143,7 +152,7 @@ impl Drop for World {
 	}
 }
 
-fn sdCube(x: f32, y: f32, z: f32) -> f32 {
+fn sd_cube(x: f32, y: f32, z: f32) -> f32 {
 	let qx = x.abs() - 0.5;
 	let qy = y.abs() - 0.5;
 	let qz = z.abs() - 0.5;
@@ -157,15 +166,15 @@ fn init_voxels(voxels: &mut [u8]) {
 	for z in 0..(256 * RES) {
 		for y in 0..(16 * RES) {
 			for x in 0..(16 * RES) {
-				let mut px = (x as f32) / resf;
-				let mut py = (y as f32) / resf;
-				let mut pz = (z as f32) / resf;
+				let px = x as f32 / resf;
+				let py = y as f32 / resf;
+				let pz = z as f32 / resf;
 
 				let mut sd = pz - 1.0;
-				sd = sd.min(sdCube(px - 5.5, py - 2.5, pz - 8.5));
-				sd = sd.min(sdCube(px - 3.5, py - 2.5, pz - 8.5));
-				sd = sd.min(sdCube(px - 2.5, py - 2.5, pz - 8.5));
-				sd = sd.min(sdCube(px - 3.5, py - 3.5, pz - 8.5));
+				sd = sd.min(sd_cube(px - 5.5, py - 2.5, pz - 8.5));
+				sd = sd.min(sd_cube(px - 3.5, py - 2.5, pz - 8.5));
+				sd = sd.min(sd_cube(px - 2.5, py - 2.5, pz - 8.5));
+				sd = sd.min(sd_cube(px - 3.5, py - 3.5, pz - 8.5));
 
 				let d = 255.0 * (sd + 1.0) / (RANGE + 1.0);
 				voxels[x + y * 16 * RES + z * 16 * 16 * RES * RES] = (d.round() as i64).max(0).min(255) as u8;

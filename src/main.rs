@@ -25,7 +25,7 @@ async fn amain() {
 	let mut window = Window::new(gfx.clone(), &event_loop);
 	grab_cursor(&window, true);
 
-	let world = World::new(gfx);
+	let mut world = World::new(gfx);
 	let mut camera = Camera::new();
 	camera.pos = [8.0, 8.0, 8.0].into();
 	camera.yaw = 3.14159;
@@ -105,7 +105,7 @@ async fn amain() {
 
 				rotation = zero();
 
-				window.draw(&world, &camera);
+				window.draw(&mut world, &camera);
 			},
 			_ => (),
 		};

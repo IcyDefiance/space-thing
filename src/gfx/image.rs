@@ -9,15 +9,17 @@ pub(super) fn create_device_local_image(
 	image_type: vk::ImageType,
 	format: vk::Format,
 	extent: vk::Extent3D,
+	mipmaps: bool,
 	usage: vk::ImageUsageFlags,
 	src: vk::Buffer,
 ) -> (vk::Image, Allocation, vk::ImageView) {
 	unsafe {
+		let mip_levels = if mipmaps { max_mipmaps(extent) } else { 1 };
 		let ci = ash::vk::ImageCreateInfo::builder()
 			.image_type(image_type)
 			.format(format)
 			.extent(extent)
-			.mip_levels(1)
+			.mip_levels(mip_levels)
 			.array_layers(1)
 			.samples(vk::SampleCountFlags::TYPE_1)
 			.usage(usage | vk::ImageUsageFlags::TRANSFER_DST);
@@ -33,7 +35,16 @@ pub(super) fn create_device_local_image(
 		let cmd = device.allocate_command_buffers(&ci).unwrap()[0];
 		device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::builder()).unwrap();
 
-		transition_layout(device, cmd, image, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
+		transition_layout(
+			device,
+			cmd,
+			image,
+			mip_levels,
+			vk::ImageLayout::UNDEFINED,
+			vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+			vk::PipelineStageFlags::empty(),
+			vk::PipelineStageFlags::TRANSFER,
+		);
 
 		let copy = vk::BufferImageCopy::builder()
 			.image_subresource(
@@ -47,8 +58,11 @@ pub(super) fn create_device_local_image(
 			device,
 			cmd,
 			image,
+			mip_levels,
 			vk::ImageLayout::TRANSFER_DST_OPTIMAL,
 			vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+			vk::PipelineStageFlags::TRANSFER,
+			vk::PipelineStageFlags::FRAGMENT_SHADER,
 		);
 
 		device.end_command_buffer(cmd).unwrap();
@@ -65,7 +79,7 @@ pub(super) fn create_device_local_image(
 		let ci = vk::ImageViewCreateInfo::builder().image(image).view_type(view_type).format(format).subresource_range(
 			vk::ImageSubresourceRange::builder()
 				.aspect_mask(vk::ImageAspectFlags::COLOR)
-				.level_count(1)
+				.level_count(mip_levels)
 				.layer_count(1)
 				.build(),
 		);
@@ -80,23 +94,25 @@ pub(super) fn create_device_local_image(
 	}
 }
 
-unsafe fn transition_layout(
+pub(super) unsafe fn transition_layout(
 	device: &Device,
 	cmd: vk::CommandBuffer,
 	image: vk::Image,
+	level_count: u32,
 	old_layout: vk::ImageLayout,
 	new_layout: vk::ImageLayout,
+	src_stage_mask: vk::PipelineStageFlags,
+	dst_stage_mask: vk::PipelineStageFlags,
 ) {
-	let (src_access_mask, src_stage_mask) = match old_layout {
-		vk::ImageLayout::UNDEFINED => (vk::AccessFlags::empty(), vk::PipelineStageFlags::TOP_OF_PIPE),
-		vk::ImageLayout::TRANSFER_DST_OPTIMAL => (vk::AccessFlags::TRANSFER_WRITE, vk::PipelineStageFlags::TRANSFER),
+	let src_access_mask = match old_layout {
+		vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::AccessFlags::SHADER_READ,
+		vk::ImageLayout::TRANSFER_DST_OPTIMAL => vk::AccessFlags::TRANSFER_WRITE,
+		vk::ImageLayout::UNDEFINED => vk::AccessFlags::empty(),
 		_ => unimplemented!(),
 	};
-	let (dst_access_mask, dst_stage_mask) = match new_layout {
-		vk::ImageLayout::TRANSFER_DST_OPTIMAL => (vk::AccessFlags::TRANSFER_WRITE, vk::PipelineStageFlags::TRANSFER),
-		vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => {
-			(vk::AccessFlags::SHADER_READ, vk::PipelineStageFlags::FRAGMENT_SHADER)
-		},
+	let dst_access_mask = match new_layout {
+		vk::ImageLayout::TRANSFER_DST_OPTIMAL => vk::AccessFlags::TRANSFER_WRITE,
+		vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::AccessFlags::SHADER_READ,
 		_ => unimplemented!(),
 	};
 
@@ -111,11 +127,15 @@ unsafe fn transition_layout(
 		.subresource_range(
 			vk::ImageSubresourceRange::builder()
 				.aspect_mask(vk::ImageAspectFlags::COLOR)
-				.level_count(1)
+				.level_count(level_count)
 				.layer_count(1)
 				.build(),
 		)
 		.build();
 	device
 		.cmd_pipeline_barrier(cmd, src_stage_mask, dst_stage_mask, vk::DependencyFlags::empty(), &[], &[], &[barrier]);
+}
+
+fn max_mipmaps(extent: vk::Extent3D) -> u32 {
+	32 - (extent.width | extent.height | extent.depth).leading_zeros()
 }

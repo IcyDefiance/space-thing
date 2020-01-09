@@ -1,5 +1,6 @@
-use crate::gfx::{camera::Camera, world::World, Gfx, TriangleVertex};
+use crate::gfx::{camera::Camera, image::transition_layout, world::World, Gfx, TriangleVertex};
 use ash::{version::DeviceV1_0, vk, Device};
+use nalgebra::Vector3;
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::{
 	cmp::{max, min},
@@ -22,6 +23,8 @@ pub struct Window {
 	image_views: Vec<vk::ImageView>,
 	pub(super) pipeline: vk::Pipeline,
 	pub(super) framebuffers: Vec<vk::Framebuffer>,
+	stencil_desc_pool: vk::DescriptorPool,
+	stencil_desc_sets: Vec<vk::DescriptorSet>,
 	desc_pool: vk::DescriptorPool,
 	desc_sets: Vec<vk::DescriptorSet>,
 	frame_data: [FrameData; 2],
@@ -98,6 +101,7 @@ impl Window {
 		let pipeline = create_pipeline(&gfx, image_extent, render_pass);
 		let framebuffers = create_framebuffers(&gfx, &image_views, render_pass, image_extent);
 
+		let (stencil_desc_pool, stencil_desc_sets) = create_stencil_desc_pool(&gfx, image_views.len() as _);
 		let (desc_pool, desc_sets) = create_desc_pool(&gfx, image_views.len() as _);
 
 		let frame_data = [FrameData::new(&gfx), FrameData::new(&gfx)];
@@ -113,6 +117,8 @@ impl Window {
 			image_views,
 			pipeline,
 			framebuffers,
+			stencil_desc_pool,
+			stencil_desc_sets,
 			desc_pool,
 			desc_sets,
 			frame_data,
@@ -121,7 +127,7 @@ impl Window {
 		}
 	}
 
-	pub fn draw(&mut self, world: &World, camera: &Camera) {
+	pub fn draw(&mut self, world: &mut World, camera: &Camera) {
 		unsafe {
 			if self.recreate_swapchain {
 				self.recreate_swapchain();
@@ -159,8 +165,13 @@ impl Window {
 
 			self.gfx.device.reset_command_pool(frame_data.cmdpool, vk::CommandPoolResetFlags::empty()).unwrap();
 
+			let stencil_desc_set = self.stencil_desc_sets[image_uidx];
 			let desc_set = self.desc_sets[image_uidx];
 
+			let voxels_out_info = [vk::DescriptorImageInfo::builder()
+				.image_view(world.voxels_view)
+				.image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+				.build()];
 			let voxels_info = [vk::DescriptorImageInfo::builder()
 				.image_view(world.voxels_view)
 				.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -174,6 +185,12 @@ impl Window {
 				.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
 				.build()];
 			let write = [
+				vk::WriteDescriptorSet::builder()
+					.dst_set(stencil_desc_set)
+					.dst_binding(0)
+					.descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+					.image_info(&voxels_out_info)
+					.build(),
 				vk::WriteDescriptorSet::builder()
 					.dst_set(desc_set)
 					.dst_binding(0)
@@ -204,6 +221,7 @@ impl Window {
 					.command_buffer_count((volumes_len - frame_data.secondaries.len()) as _);
 				frame_data.secondaries.extend(self.gfx.device.allocate_command_buffers(&ci).unwrap());
 			}
+
 			for (_, &cmd) in (0..volumes_len).zip(&frame_data.secondaries) {
 				let flags =
 					vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT | vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE;
@@ -236,6 +254,53 @@ impl Window {
 
 			let bi = vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 			self.gfx.device.begin_command_buffer(frame_data.primary, &bi).unwrap();
+
+			for set_cmd in world.set_cmds.drain(..) {
+				transition_layout(
+					&self.gfx.device,
+					frame_data.primary,
+					world.voxels,
+					1,
+					vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+					vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+					vk::PipelineStageFlags::FRAGMENT_SHADER,
+					vk::PipelineStageFlags::COMPUTE_SHADER,
+				);
+
+				self.gfx.device.cmd_push_constants(
+					frame_data.primary,
+					self.gfx.stencil_pipeline_layout,
+					vk::ShaderStageFlags::COMPUTE,
+					0,
+					slice::from_raw_parts(&set_cmd as *const _ as _, size_of::<Vector3<u32>>()),
+				);
+				self.gfx.device.cmd_bind_pipeline(
+					frame_data.primary,
+					vk::PipelineBindPoint::COMPUTE,
+					self.gfx.stencil_pipeline,
+				);
+				self.gfx.device.cmd_bind_descriptor_sets(
+					frame_data.primary,
+					vk::PipelineBindPoint::COMPUTE,
+					self.gfx.stencil_pipeline_layout,
+					0,
+					&[stencil_desc_set],
+					&[],
+				);
+				self.gfx.device.cmd_dispatch(frame_data.primary, 1, 1, 1);
+
+				transition_layout(
+					&self.gfx.device,
+					frame_data.primary,
+					world.voxels,
+					1,
+					vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+					vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+					vk::PipelineStageFlags::COMPUTE_SHADER,
+					vk::PipelineStageFlags::FRAGMENT_SHADER,
+				);
+			}
+
 			let ci = vk::RenderPassBeginInfo::builder()
 				.render_pass(self.render_pass)
 				.framebuffer(framebuffer)
@@ -295,7 +360,12 @@ impl Window {
 
 			if image_views.len() != self.image_views.len() {
 				self.gfx.device.destroy_descriptor_pool(self.desc_pool, None);
+				self.gfx.device.destroy_descriptor_pool(self.stencil_desc_pool, None);
+				let (stencil_desc_pool, stencil_desc_sets) =
+					create_stencil_desc_pool(&self.gfx, image_views.len() as _);
 				let (desc_pool, desc_sets) = create_desc_pool(&self.gfx, image_views.len() as _);
+				self.stencil_desc_pool = stencil_desc_pool;
+				self.stencil_desc_sets = stencil_desc_sets;
 				self.desc_pool = desc_pool;
 				self.desc_sets = desc_sets;
 			}
@@ -322,6 +392,7 @@ impl Drop for Window {
 			self.frame_data[1].dispose(&self.gfx.device);
 
 			self.gfx.device.destroy_descriptor_pool(self.desc_pool, None);
+			self.gfx.device.destroy_descriptor_pool(self.stencil_desc_pool, None);
 			for &framebuffer in &self.framebuffers {
 				self.gfx.device.destroy_framebuffer(framebuffer, None);
 			}
@@ -460,16 +531,17 @@ fn create_swapchain(
 }
 
 fn create_pipeline(gfx: &Gfx, image_extent: vk::Extent2D, render_pass: vk::RenderPass) -> vk::Pipeline {
+	let name = CStr::from_bytes_with_nul(b"main\0").unwrap();
 	let stages = [
 		vk::PipelineShaderStageCreateInfo::builder()
 			.stage(vk::ShaderStageFlags::VERTEX)
 			.module(gfx.vshader)
-			.name(CStr::from_bytes_with_nul(b"main\0").unwrap())
+			.name(name)
 			.build(),
 		vk::PipelineShaderStageCreateInfo::builder()
 			.stage(vk::ShaderStageFlags::FRAGMENT)
 			.module(gfx.fshader)
-			.name(CStr::from_bytes_with_nul(b"main\0").unwrap())
+			.name(name)
 			.build(),
 	];
 	let vertex_binding_descriptions = [TriangleVertex::binding_desc()];
@@ -539,6 +611,19 @@ fn create_desc_pool(gfx: &Gfx, max_sets: u32) -> (vk::DescriptorPool, Vec<vk::De
 	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
 
 	let set_layouts = vec![gfx.desc_layout; max_sets as _];
+	let ci = vk::DescriptorSetAllocateInfo::builder().descriptor_pool(desc_pool).set_layouts(&set_layouts);
+	let desc_sets = unsafe { gfx.device.allocate_descriptor_sets(&ci) }.unwrap();
+
+	(desc_pool, desc_sets)
+}
+
+fn create_stencil_desc_pool(gfx: &Gfx, max_sets: u32) -> (vk::DescriptorPool, Vec<vk::DescriptorSet>) {
+	let pool_sizes =
+		[vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::STORAGE_IMAGE).descriptor_count(max_sets).build()];
+	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(max_sets).pool_sizes(&pool_sizes);
+	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
+
+	let set_layouts = vec![gfx.stencil_desc_layout; max_sets as _];
 	let ci = vk::DescriptorSetAllocateInfo::builder().descriptor_pool(desc_pool).set_layouts(&set_layouts);
 	let desc_sets = unsafe { gfx.device.allocate_descriptor_sets(&ci) }.unwrap();
 
