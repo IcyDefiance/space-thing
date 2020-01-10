@@ -42,7 +42,8 @@ pub struct Gfx {
 	queue: vk::Queue,
 	cmdpool: vk::CommandPool,
 	cmdpool_transient: vk::CommandPool,
-	desc_layout: vk::DescriptorSetLayout,
+	gfx_desc_layout: vk::DescriptorSetLayout,
+	world_desc_layout: vk::DescriptorSetLayout,
 	pipeline_layout: vk::PipelineLayout,
 	allocator: Allocator,
 	triangle: vk::Buffer,
@@ -58,6 +59,8 @@ pub struct Gfx {
 	blocks: vk::Image,
 	blocks_alloc: Allocation,
 	blocks_view: vk::ImageView,
+	desc_pool: vk::DescriptorPool,
+	desc_set: vk::DescriptorSet,
 }
 impl Gfx {
 	pub async fn new() -> Arc<Self> {
@@ -139,6 +142,14 @@ impl Gfx {
 			.address_mode_w(vk::SamplerAddressMode::REPEAT);
 		let blocks_sampler = unsafe { device.create_sampler(&ci, None) }.unwrap();
 
+		let bindings = [vk::DescriptorSetLayoutBinding::builder()
+			.binding(0)
+			.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+			.stage_flags(vk::ShaderStageFlags::FRAGMENT)
+			.immutable_samplers(&[blocks_sampler])
+			.build()];
+		let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
+		let gfx_desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
 		let bindings = [
 			vk::DescriptorSetLayoutBinding::builder()
 				.binding(0)
@@ -152,17 +163,11 @@ impl Gfx {
 				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
 				.immutable_samplers(&[mats_sampler])
 				.build(),
-			vk::DescriptorSetLayoutBinding::builder()
-				.binding(2)
-				.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
-				.immutable_samplers(&[blocks_sampler])
-				.build(),
 		];
 		let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
-		let desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
+		let world_desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
 
-		let desc_layouts = [desc_layout];
+		let desc_layouts = [gfx_desc_layout, world_desc_layout];
 		let push_constant_ranges = [vk::PushConstantRange::builder()
 			.stage_flags(vk::ShaderStageFlags::FRAGMENT)
 			.offset(0)
@@ -219,6 +224,8 @@ impl Gfx {
 		unsafe { device.destroy_buffer(blocks_cpu, None) };
 		allocator.free_memory(&blocks_cpualloc).unwrap();
 
+		let (desc_pool, desc_set) = create_desc_pool(&device, gfx_desc_layout, blocks_view);
+
 		Arc::new(Self {
 			_entry: entry,
 			instance,
@@ -236,7 +243,8 @@ impl Gfx {
 			queue,
 			cmdpool,
 			cmdpool_transient,
-			desc_layout,
+			gfx_desc_layout,
+			world_desc_layout,
 			pipeline_layout,
 			allocator,
 			triangle,
@@ -252,6 +260,8 @@ impl Gfx {
 			blocks,
 			blocks_alloc,
 			blocks_view,
+			desc_pool,
+			desc_set,
 		})
 	}
 }
@@ -270,7 +280,8 @@ impl Drop for Gfx {
 			self.allocator.free_memory(&self.triangle_alloc).unwrap();
 			self.allocator.destroy();
 			self.device.destroy_pipeline_layout(self.pipeline_layout, None);
-			self.device.destroy_descriptor_set_layout(self.desc_layout, None);
+			self.device.destroy_descriptor_set_layout(self.world_desc_layout, None);
+			self.device.destroy_descriptor_set_layout(self.gfx_desc_layout, None);
 			self.device.destroy_sampler(self.mats_sampler, None);
 			self.device.destroy_sampler(self.voxels_sampler, None);
 			self.device.destroy_command_pool(self.cmdpool_transient, None);
@@ -344,4 +355,33 @@ fn create_shader(device: &Device, code: &[u8]) -> vk::ShaderModule {
 	let code = unsafe { slice::from_raw_parts(code.as_ptr() as _, code.len() / 4) };
 	let ci = vk::ShaderModuleCreateInfo::builder().code(code);
 	unsafe { device.create_shader_module(&ci, None) }.unwrap()
+}
+
+fn create_desc_pool(
+	device: &Device,
+	desc_layout: vk::DescriptorSetLayout,
+	blocks_view: vk::ImageView,
+) -> (vk::DescriptorPool, vk::DescriptorSet) {
+	let pool_sizes =
+		[vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).descriptor_count(3).build()];
+	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(1).pool_sizes(&pool_sizes);
+	let desc_pool = unsafe { device.create_descriptor_pool(&ci, None) }.unwrap();
+
+	let set_layouts = [desc_layout];
+	let ci = vk::DescriptorSetAllocateInfo::builder().descriptor_pool(desc_pool).set_layouts(&set_layouts);
+	let desc_set = unsafe { device.allocate_descriptor_sets(&ci) }.unwrap()[0];
+
+	let blocks_info = [vk::DescriptorImageInfo::builder()
+		.image_view(blocks_view)
+		.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+		.build()];
+	let write = [vk::WriteDescriptorSet::builder()
+		.dst_set(desc_set)
+		.dst_binding(0)
+		.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+		.image_info(&blocks_info)
+		.build()];
+	unsafe { device.update_descriptor_sets(&write, &[]) };
+
+	(desc_pool, desc_set)
 }

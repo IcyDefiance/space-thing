@@ -3,9 +3,9 @@
 
 #ifdef USE_VULKAN
 layout(location = 0) out vec4 out_color;
-layout(binding = 0) uniform sampler3D voxels;
-layout(binding = 1) uniform sampler3D mats;
-layout(binding = 2) uniform sampler2D blocks[2];
+layout(set = 0, binding = 0) uniform sampler2D blocks[2];
+layout(set = 1, binding = 0) uniform sampler3D voxels;
+layout(set = 1, binding = 1) uniform sampler3D mats;
 layout(push_constant) uniform PushConsts {
 	vec3 cam_pos;
 	vec4 cam_rot;

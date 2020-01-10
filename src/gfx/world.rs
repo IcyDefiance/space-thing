@@ -29,6 +29,9 @@ pub struct World {
 	mats_alloc: Allocation,
 	pub(super) mats_view: vk::ImageView,
 
+	desc_pool: vk::DescriptorPool,
+	pub(super) desc_set: vk::DescriptorSet,
+
 	pub(super) set_cmds: Vec<Vector3<u32>>,
 }
 impl World {
@@ -68,6 +71,8 @@ impl World {
 			mats_cpu,
 		);
 
+		let (desc_pool, desc_set) = create_desc_pool(&gfx, voxels_view, mats_view);
+
 		Self {
 			gfx,
 			voxels_cpu,
@@ -82,6 +87,8 @@ impl World {
 			mats,
 			mats_alloc,
 			mats_view,
+			desc_pool,
+			desc_set,
 			set_cmds: vec![],
 		}
 	}
@@ -181,4 +188,45 @@ fn init_voxels(voxels: &mut [u8]) {
 			}
 		}
 	}
+}
+
+fn create_desc_pool(
+	gfx: &Gfx,
+	voxels_view: vk::ImageView,
+	mats_view: vk::ImageView,
+) -> (vk::DescriptorPool, vk::DescriptorSet) {
+	let pool_sizes =
+		[vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).descriptor_count(3).build()];
+	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(1).pool_sizes(&pool_sizes);
+	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
+
+	let set_layouts = [gfx.world_desc_layout];
+	let ci = vk::DescriptorSetAllocateInfo::builder().descriptor_pool(desc_pool).set_layouts(&set_layouts);
+	let desc_set = unsafe { gfx.device.allocate_descriptor_sets(&ci) }.unwrap()[0];
+
+	let voxels_info = [vk::DescriptorImageInfo::builder()
+		.image_view(voxels_view)
+		.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+		.build()];
+	let mats_info = [vk::DescriptorImageInfo::builder()
+		.image_view(mats_view)
+		.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+		.build()];
+	let write = [
+		vk::WriteDescriptorSet::builder()
+			.dst_set(desc_set)
+			.dst_binding(0)
+			.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+			.image_info(&voxels_info)
+			.build(),
+		vk::WriteDescriptorSet::builder()
+			.dst_set(desc_set)
+			.dst_binding(1)
+			.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+			.image_info(&mats_info)
+			.build(),
+	];
+	unsafe { gfx.device.update_descriptor_sets(&write, &[]) };
+
+	(desc_pool, desc_set)
 }
