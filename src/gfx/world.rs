@@ -9,25 +9,16 @@ use nalgebra::Vector3;
 use std::{mem::transmute, ptr::write_bytes, sync::Arc};
 use vk_mem::Allocation;
 
-const RES: usize = 4;
+const RES: u32 = 4;
 const RANGE: f32 = 10.0;
+const CHUNK_EXTENT: vk::Extent3D = vk::Extent3D { width: 16 * RES, height: 16 * RES, depth: 256 * RES };
+const CHUNK_SIZE: usize = (CHUNK_EXTENT.width * CHUNK_EXTENT.height * CHUNK_EXTENT.depth) as _;
 
 pub struct World {
 	gfx: Arc<Gfx>,
 
-	voxels_cpu: vk::Buffer,
-	voxels_cpualloc: Allocation,
-	voxels_cpumap: &'static mut [[[u8; 256]; 16]; 16],
-	pub(super) voxels: vk::Image,
-	voxels_alloc: Allocation,
-	pub(super) voxels_view: vk::ImageView,
-
-	mats_cpu: vk::Buffer,
-	mats_cpualloc: Allocation,
-	mats_cpumap: &'static mut [[[u8; 256]; 16]; 16],
-	pub(super) mats: vk::Image,
-	mats_alloc: Allocation,
-	pub(super) mats_view: vk::ImageView,
+	pub(super) voxels: ChunkLayer,
+	pub(super) mats: ChunkLayer,
 
 	desc_pool: vk::DescriptorPool,
 	pub(super) desc_set: vk::DescriptorSet,
@@ -36,61 +27,14 @@ pub struct World {
 }
 impl World {
 	pub fn new(gfx: Arc<Gfx>) -> Self {
-		let res32 = RES as u32;
-		let res64 = RES as u64;
-		let chunk_size = 16 * 16 * 256 * res64 * res64 * res64;
-		let chunk_extent = vk::Extent3D { width: 16 * res32, height: 16 * res32, depth: 256 * res32 };
+		let voxels = ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::STORAGE, init_voxels);
+		let mats = ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::empty(), |map| unsafe {
+			write_bytes(map.as_mut_ptr(), 1, map.len())
+		});
 
-		let (voxels_cpu, voxels_cpualloc, voxels_cpumap) = create_cpu_buffer::<u8>(&gfx.allocator, chunk_size as _);
-		init_voxels(voxels_cpumap);
-		let (voxels, voxels_alloc, voxels_view) = create_device_local_image(
-			&gfx.device,
-			gfx.queue,
-			&gfx.allocator,
-			gfx.cmdpool_transient,
-			vk::ImageType::TYPE_3D,
-			vk::Format::R8_UNORM,
-			chunk_extent,
-			false,
-			vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
-			voxels_cpu,
-		);
+		let (desc_pool, desc_set) = create_desc_pool(&gfx, voxels.view, mats.view);
 
-		let (mats_cpu, mats_cpualloc, mats_cpumap) = create_cpu_buffer::<u8>(&gfx.allocator, chunk_size as _);
-		unsafe { write_bytes(mats_cpumap.as_mut_ptr(), 1, mats_cpumap.len()) };
-		let (mats, mats_alloc, mats_view) = create_device_local_image(
-			&gfx.device,
-			gfx.queue,
-			&gfx.allocator,
-			gfx.cmdpool_transient,
-			vk::ImageType::TYPE_3D,
-			vk::Format::R8_UNORM,
-			chunk_extent,
-			false,
-			vk::ImageUsageFlags::SAMPLED,
-			mats_cpu,
-		);
-
-		let (desc_pool, desc_set) = create_desc_pool(&gfx, voxels_view, mats_view);
-
-		Self {
-			gfx,
-			voxels_cpu,
-			voxels_cpualloc,
-			voxels_cpumap: unsafe { transmute(voxels_cpumap.as_mut_ptr()) },
-			voxels,
-			voxels_alloc,
-			voxels_view,
-			mats_cpu,
-			mats_cpualloc,
-			mats_cpumap: unsafe { transmute(mats_cpumap.as_mut_ptr()) },
-			mats,
-			mats_alloc,
-			mats_view,
-			desc_pool,
-			desc_set,
-			set_cmds: vec![],
-		}
+		Self { gfx, voxels, mats, desc_pool, desc_set, set_cmds: vec![] }
 	}
 
 	pub fn set_block(&mut self, pos: Vector3<u32>) {
@@ -138,25 +82,52 @@ impl World {
 	}
 
 	fn sample_exact(&self, x: usize, y: usize, z: usize) -> f32 {
-		(RANGE + 1.0) * (self.voxels_cpumap[x][y][z] as f32) / 255.0 - 1.0
+		(RANGE + 1.0) * (self.voxels.map[x][y][z] as f32) / 255.0 - 1.0
 	}
 }
 impl Drop for World {
 	fn drop(&mut self) {
+		unsafe { self.gfx.device.destroy_descriptor_pool(self.desc_pool, None) };
+	}
+}
+
+pub(super) struct ChunkLayer {
+	gfx: Arc<Gfx>,
+	buf: vk::Buffer,
+	cpualloc: Allocation,
+	map: &'static mut [[[u8; 256]; 16]; 16],
+	pub(super) image: vk::Image,
+	alloc: Allocation,
+	pub(super) view: vk::ImageView,
+}
+impl ChunkLayer {
+	fn new(gfx: Arc<Gfx>, usage: vk::ImageUsageFlags, init: impl FnOnce(&mut [u8])) -> Self {
+		let (buf, cpualloc, map) = create_cpu_buffer::<u8>(&gfx.allocator, CHUNK_SIZE);
+		init(map);
+		let (image, alloc, view) = create_device_local_image(
+			&gfx.device,
+			gfx.queue,
+			&gfx.allocator,
+			gfx.cmdpool_transient,
+			vk::ImageType::TYPE_3D,
+			vk::Format::R8_UNORM,
+			CHUNK_EXTENT,
+			false,
+			vk::ImageUsageFlags::SAMPLED | usage,
+			buf,
+		);
+
+		Self { gfx, buf, cpualloc, map: unsafe { transmute(map.as_mut_ptr()) }, image, alloc, view }
+	}
+}
+impl Drop for ChunkLayer {
+	fn drop(&mut self) {
 		unsafe {
-			self.gfx.device.destroy_buffer(self.voxels_cpu, None);
-			self.gfx.allocator.free_memory(&self.voxels_cpualloc).unwrap();
-			self.gfx.device.destroy_image_view(self.voxels_view, None);
-			self.gfx.device.destroy_image(self.voxels, None);
-			self.gfx.allocator.free_memory(&self.voxels_alloc).unwrap();
-
-			self.gfx.device.destroy_buffer(self.mats_cpu, None);
-			self.gfx.allocator.free_memory(&self.mats_cpualloc).unwrap();
-			self.gfx.device.destroy_image_view(self.mats_view, None);
-			self.gfx.device.destroy_image(self.mats, None);
-			self.gfx.allocator.free_memory(&self.mats_alloc).unwrap();
-
-			self.gfx.device.destroy_descriptor_pool(self.desc_pool, None);
+			self.gfx.device.destroy_buffer(self.buf, None);
+			self.gfx.allocator.free_memory(&self.cpualloc).unwrap();
+			self.gfx.device.destroy_image_view(self.view, None);
+			self.gfx.device.destroy_image(self.image, None);
+			self.gfx.allocator.free_memory(&self.alloc).unwrap();
 		}
 	}
 }
@@ -171,10 +142,11 @@ fn sd_cube(x: f32, y: f32, z: f32) -> f32 {
 
 fn init_voxels(voxels: &mut [u8]) {
 	let resf = RES as f32;
+	let resu = RES as usize;
 
-	for z in 0..(256 * RES) {
-		for y in 0..(16 * RES) {
-			for x in 0..(16 * RES) {
+	for z in 0..(256 * resu) {
+		for y in 0..(16 * resu) {
+			for x in 0..(16 * resu) {
 				let px = x as f32 / resf;
 				let py = y as f32 / resf;
 				let pz = z as f32 / resf;
@@ -186,7 +158,7 @@ fn init_voxels(voxels: &mut [u8]) {
 				sd = sd.min(sd_cube(px - 3.5, py - 3.5, pz - 8.5));
 
 				let d = 255.0 * (sd + 1.0) / (RANGE + 1.0);
-				voxels[x + y * 16 * RES + z * 16 * 16 * RES * RES] = (d.round() as i64).max(0).min(255) as u8;
+				voxels[x + y * 16 * resu + z * 16 * 16 * resu * resu] = (d.round() as i64).max(0).min(255) as u8;
 			}
 		}
 	}

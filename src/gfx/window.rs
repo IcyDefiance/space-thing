@@ -206,7 +206,7 @@ impl Window {
 			let stencil_desc_set = self.stencil_desc_sets[image_uidx];
 			if world.set_cmds.len() > 0 {
 				let voxels_out_info = [vk::DescriptorImageInfo::builder()
-					.image_view(world.voxels_view)
+					.image_view(world.voxels.view)
 					.image_layout(vk::ImageLayout::GENERAL)
 					.build()];
 				let write = [vk::WriteDescriptorSet::builder()
@@ -221,7 +221,7 @@ impl Window {
 				transition_layout(
 					&self.gfx.device,
 					frame_data.primary,
-					world.voxels,
+					world.voxels.image,
 					1,
 					vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
 					vk::ImageLayout::GENERAL,
@@ -254,7 +254,7 @@ impl Window {
 				transition_layout(
 					&self.gfx.device,
 					frame_data.primary,
-					world.voxels,
+					world.voxels.image,
 					1,
 					vk::ImageLayout::GENERAL,
 					vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
