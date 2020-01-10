@@ -50,6 +50,7 @@ pub struct Gfx {
 	triangle_alloc: Allocation,
 	voxels_sampler: vk::Sampler,
 	mats_sampler: vk::Sampler,
+	blocks_sampler: vk::Sampler,
 	vshader: vk::ShaderModule,
 	fshader: vk::ShaderModule,
 	stencil_shader: vk::ShaderModule,
@@ -251,6 +252,7 @@ impl Gfx {
 			triangle_alloc,
 			voxels_sampler,
 			mats_sampler,
+			blocks_sampler,
 			vshader,
 			fshader,
 			stencil_shader,
@@ -280,12 +282,15 @@ impl Drop for Gfx {
 			self.allocator.free_memory(&self.triangle_alloc).unwrap();
 			self.allocator.destroy();
 			self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+			self.device.destroy_descriptor_set_layout(self.stencil_desc_layout, None);
 			self.device.destroy_descriptor_set_layout(self.world_desc_layout, None);
 			self.device.destroy_descriptor_set_layout(self.gfx_desc_layout, None);
+			self.device.destroy_sampler(self.blocks_sampler, None);
 			self.device.destroy_sampler(self.mats_sampler, None);
 			self.device.destroy_sampler(self.voxels_sampler, None);
 			self.device.destroy_command_pool(self.cmdpool_transient, None);
 			self.device.destroy_command_pool(self.cmdpool, None);
+			self.device.destroy_descriptor_pool(self.desc_pool, None);
 			self.device.destroy_device(None);
 			self.instance.destroy_instance(None);
 		}

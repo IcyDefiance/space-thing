@@ -155,6 +155,8 @@ impl Drop for World {
 			self.gfx.device.destroy_image_view(self.mats_view, None);
 			self.gfx.device.destroy_image(self.mats, None);
 			self.gfx.allocator.free_memory(&self.mats_alloc).unwrap();
+
+			self.gfx.device.destroy_descriptor_pool(self.desc_pool, None);
 		}
 	}
 }
