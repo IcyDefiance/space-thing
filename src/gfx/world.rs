@@ -6,13 +6,12 @@ use crate::gfx::{
 };
 use ash::{version::DeviceV1_0, vk};
 use nalgebra::Vector3;
-use std::{mem::transmute, ptr::write_bytes, sync::Arc};
+use std::sync::Arc;
 use vk_mem::Allocation;
 
 const RES: u32 = 4;
 const RANGE: f32 = 10.0;
 const CHUNK_EXTENT: vk::Extent3D = vk::Extent3D { width: 16 * RES, height: 16 * RES, depth: 256 * RES };
-const CHUNK_SIZE: usize = (CHUNK_EXTENT.width * CHUNK_EXTENT.height * CHUNK_EXTENT.depth) as _;
 
 pub struct World {
 	gfx: Arc<Gfx>,
@@ -22,19 +21,24 @@ pub struct World {
 
 	desc_pool: vk::DescriptorPool,
 	pub(super) desc_set: vk::DescriptorSet,
+	stencil_desc_pool: vk::DescriptorPool,
+	pub(super) stencil_desc_set: vk::DescriptorSet,
 
 	pub(super) set_cmds: Vec<Vector3<u32>>,
 }
 impl World {
 	pub fn new(gfx: Arc<Gfx>) -> Self {
-		let voxels = ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::STORAGE, init_voxels);
-		let mats = ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::empty(), |map| unsafe {
-			write_bytes(map.as_mut_ptr(), 1, map.len())
-		});
+		let mut voxels = Box::new([[[0; 16]; 16]; 256]);
+		init_voxels(&mut *voxels);
+		let voxels = ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::STORAGE, voxels);
+
+		let mut mats = Box::new([[[0; 16]; 16]; 256]);
+		let mats = ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::empty(), mats);
 
 		let (desc_pool, desc_set) = create_desc_pool(&gfx, voxels.view, mats.view);
+		let (stencil_desc_pool, stencil_desc_set) = create_stencil_desc_pool(&gfx, voxels.view);
 
-		Self { gfx, voxels, mats, desc_pool, desc_set, set_cmds: vec![] }
+		Self { gfx, voxels, mats, desc_pool, desc_set, stencil_desc_pool, stencil_desc_set, set_cmds: vec![] }
 	}
 
 	pub fn set_block(&mut self, pos: Vector3<u32>) {
@@ -82,28 +86,27 @@ impl World {
 	}
 
 	fn sample_exact(&self, x: usize, y: usize, z: usize) -> f32 {
-		(RANGE + 1.0) * (self.voxels.map[x][y][z] as f32) / 255.0 - 1.0
+		(RANGE + 1.0) * (self.voxels.data[x][y][z] as f32) / 255.0 - 1.0
 	}
 }
 impl Drop for World {
 	fn drop(&mut self) {
+		unsafe { self.gfx.device.destroy_descriptor_pool(self.stencil_desc_pool, None) };
 		unsafe { self.gfx.device.destroy_descriptor_pool(self.desc_pool, None) };
 	}
 }
 
 pub(super) struct ChunkLayer {
 	gfx: Arc<Gfx>,
-	buf: vk::Buffer,
-	cpualloc: Allocation,
-	map: &'static mut [[[u8; 256]; 16]; 16],
+	data: Box<[[[u8; 16]; 16]; 256]>,
 	pub(super) image: vk::Image,
 	alloc: Allocation,
 	pub(super) view: vk::ImageView,
 }
 impl ChunkLayer {
-	fn new(gfx: Arc<Gfx>, usage: vk::ImageUsageFlags, init: impl FnOnce(&mut [u8])) -> Self {
-		let (buf, cpualloc, map) = create_cpu_buffer::<u8>(&gfx.allocator, CHUNK_SIZE);
-		init(map);
+	fn new(gfx: Arc<Gfx>, usage: vk::ImageUsageFlags, data: Box<[[[u8; 16]; 16]; 256]>) -> Self {
+		let (buf, cpualloc, map) = create_cpu_buffer::<[[u8; 16]; 16]>(&gfx.allocator, 256);
+		map.copy_from_slice(&*data);
 		let (image, alloc, view) = create_device_local_image(
 			&gfx.device,
 			gfx.queue,
@@ -116,15 +119,17 @@ impl ChunkLayer {
 			vk::ImageUsageFlags::SAMPLED | usage,
 			buf,
 		);
+		unsafe {
+			gfx.device.destroy_buffer(buf, None);
+			gfx.allocator.free_memory(&cpualloc).unwrap();
+		}
 
-		Self { gfx, buf, cpualloc, map: unsafe { transmute(map.as_mut_ptr()) }, image, alloc, view }
+		Self { gfx, data, image, alloc, view }
 	}
 }
 impl Drop for ChunkLayer {
 	fn drop(&mut self) {
 		unsafe {
-			self.gfx.device.destroy_buffer(self.buf, None);
-			self.gfx.allocator.free_memory(&self.cpualloc).unwrap();
 			self.gfx.device.destroy_image_view(self.view, None);
 			self.gfx.device.destroy_image(self.image, None);
 			self.gfx.allocator.free_memory(&self.alloc).unwrap();
@@ -140,7 +145,7 @@ fn sd_cube(x: f32, y: f32, z: f32) -> f32 {
 	return l2.sqrt() + qx.max(qy.max(qz)).min(0.0);
 }
 
-fn init_voxels(voxels: &mut [u8]) {
+fn init_voxels(voxels: &mut [[[u8; 16]; 16]; 256]) {
 	let resf = RES as f32;
 	let resu = RES as usize;
 
@@ -158,7 +163,7 @@ fn init_voxels(voxels: &mut [u8]) {
 				sd = sd.min(sd_cube(px - 3.5, py - 3.5, pz - 8.5));
 
 				let d = 255.0 * (sd + 1.0) / (RANGE + 1.0);
-				voxels[x + y * 16 * resu + z * 16 * 16 * resu * resu] = (d.round() as i64).max(0).min(255) as u8;
+				voxels[x][y][z] = (d.round() as i64).max(0).min(255) as u8;
 			}
 		}
 	}
@@ -170,7 +175,7 @@ fn create_desc_pool(
 	mats_view: vk::ImageView,
 ) -> (vk::DescriptorPool, vk::DescriptorSet) {
 	let pool_sizes =
-		[vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).descriptor_count(3).build()];
+		[vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).descriptor_count(2).build()];
 	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(1).pool_sizes(&pool_sizes);
 	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
 
@@ -200,6 +205,29 @@ fn create_desc_pool(
 			.image_info(&mats_info)
 			.build(),
 	];
+	unsafe { gfx.device.update_descriptor_sets(&write, &[]) };
+
+	(desc_pool, desc_set)
+}
+
+fn create_stencil_desc_pool(gfx: &Gfx, voxels_view: vk::ImageView) -> (vk::DescriptorPool, vk::DescriptorSet) {
+	let pool_sizes =
+		[vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::STORAGE_IMAGE).descriptor_count(1).build()];
+	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(1).pool_sizes(&pool_sizes);
+	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
+
+	let set_layouts = [gfx.world_desc_layout];
+	let ci = vk::DescriptorSetAllocateInfo::builder().descriptor_pool(desc_pool).set_layouts(&set_layouts);
+	let desc_set = unsafe { gfx.device.allocate_descriptor_sets(&ci) }.unwrap()[0];
+
+	let voxels_info =
+		[vk::DescriptorImageInfo::builder().image_view(voxels_view).image_layout(vk::ImageLayout::GENERAL).build()];
+	let write = [vk::WriteDescriptorSet::builder()
+		.dst_set(desc_set)
+		.dst_binding(0)
+		.descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+		.image_info(&voxels_info)
+		.build()];
 	unsafe { gfx.device.update_descriptor_sets(&write, &[]) };
 
 	(desc_pool, desc_set)
