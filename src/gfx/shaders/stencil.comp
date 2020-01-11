@@ -1,13 +1,14 @@
 #version 450
 
-layout (binding = 0, r8) uniform image3D voxels;
+layout (binding = 0, r8) uniform image3D voxels[441];
+layout (binding = 1, r8) uniform image3D mats[441];
 
 layout(push_constant) uniform PushConsts {
 	uvec3 pos;
 } pc;
 
 void main() {
-	float res = imageLoad(voxels, ivec3(gl_LocalInvocationID.xyz)).x;
+	float res = imageLoad(voxels[210], ivec3(gl_LocalInvocationID.xyz)).x;
 	// do stuff
-	imageStore(voxels, ivec3(gl_LocalInvocationID.xyz), vec4(res));
+	imageStore(voxels[210], ivec3(gl_LocalInvocationID.xyz), vec4(res));
 }

@@ -151,18 +151,25 @@ impl Gfx {
 			.build()];
 		let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
 		let gfx_desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
+
 		let bindings = [
 			vk::DescriptorSetLayoutBinding::builder()
 				.binding(0)
-				.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+				.descriptor_type(vk::DescriptorType::SAMPLER)
 				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
-				.immutable_samplers(&[voxels_sampler])
+				.immutable_samplers(&[voxels_sampler, mats_sampler])
 				.build(),
 			vk::DescriptorSetLayoutBinding::builder()
 				.binding(1)
-				.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+				.descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+				.descriptor_count(441)
 				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
-				.immutable_samplers(&[mats_sampler])
+				.build(),
+			vk::DescriptorSetLayoutBinding::builder()
+				.binding(2)
+				.descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+				.descriptor_count(441)
+				.stage_flags(vk::ShaderStageFlags::FRAGMENT)
 				.build(),
 		];
 		let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
@@ -325,12 +332,20 @@ fn create_stencil_pipeline(
 	device: &Device,
 	module: vk::ShaderModule,
 ) -> (vk::DescriptorSetLayout, vk::PipelineLayout, vk::Pipeline) {
-	let bindings = [vk::DescriptorSetLayoutBinding::builder()
-		.binding(0)
-		.descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-		.descriptor_count(1)
-		.stage_flags(vk::ShaderStageFlags::COMPUTE)
-		.build()];
+	let bindings = [
+		vk::DescriptorSetLayoutBinding::builder()
+			.binding(0)
+			.descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+			.descriptor_count(441)
+			.stage_flags(vk::ShaderStageFlags::COMPUTE)
+			.build(),
+		vk::DescriptorSetLayoutBinding::builder()
+			.binding(1)
+			.descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+			.descriptor_count(441)
+			.stage_flags(vk::ShaderStageFlags::COMPUTE)
+			.build(),
+	];
 	let ci = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
 	let desc_layout = unsafe { device.create_descriptor_set_layout(&ci, None) }.unwrap();
 

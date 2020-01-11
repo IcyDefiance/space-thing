@@ -6,6 +6,7 @@ edition = "2018"
 build = "build.rs"
 
 [dependencies]
+array-init = "0.1.1"
 ash = "0.29.0"
 futures = { version = "0.3.1", features = ["thread-pool"] }
 lazy_static = "1.4.0"

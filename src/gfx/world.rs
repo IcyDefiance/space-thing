@@ -4,20 +4,30 @@ use crate::gfx::{
 	math::{lerp, v3max},
 	Gfx,
 };
+use array_init::array_init;
 use ash::{version::DeviceV1_0, vk};
-use nalgebra::Vector3;
-use std::sync::Arc;
+use nalgebra::{zero, Vector2, Vector3};
+use std::{
+	alloc::{alloc, alloc_zeroed, Layout},
+	mem::MaybeUninit,
+	sync::Arc,
+};
 use vk_mem::Allocation;
 
-const RES: u32 = 4;
+const RES: usize = 4;
 const RANGE: f32 = 10.0;
-const CHUNK_EXTENT: vk::Extent3D = vk::Extent3D { width: 16 * RES, height: 16 * RES, depth: 256 * RES };
+const CHUNK_EXTENT: vk::Extent3D =
+	vk::Extent3D { width: 16 * RES as u32, height: 16 * RES as u32, depth: 256 * RES as u32 };
+
+type ChunkData = [[[u8; 16 * RES]; 16 * RES]; 256 * RES];
+type ChunkArray = [[ChunkLayer; 21]; 21];
 
 pub struct World {
 	gfx: Arc<Gfx>,
 
-	pub(super) voxels: ChunkLayer,
-	pub(super) mats: ChunkLayer,
+	pub(super) sdfs: ChunkArray,
+	pub(super) mats: ChunkArray,
+	pub(super) off: Vector2<u8>,
 
 	desc_pool: vk::DescriptorPool,
 	pub(super) desc_set: vk::DescriptorSet,
@@ -28,17 +38,26 @@ pub struct World {
 }
 impl World {
 	pub fn new(gfx: Arc<Gfx>) -> Self {
-		let mut voxels = Box::new([[[0; 16]; 16]; 256]);
-		init_voxels(&mut *voxels);
-		let voxels = ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::STORAGE, voxels);
+		let mut sdf = unsafe { Box::from_raw(alloc(Layout::new::<ChunkData>()) as _) };
+		init_sdf(&mut *sdf);
+		let sdfs: ChunkArray =
+			array_init(|_| array_init(|_| ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::STORAGE, sdf.clone())));
 
-		let mut mats = Box::new([[[0; 16]; 16]; 256]);
-		let mats = ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::empty(), mats);
+		let mats: Box<ChunkData> = unsafe { Box::from_raw(alloc_zeroed(Layout::new::<ChunkData>()) as _) };
+		let mats: ChunkArray =
+			array_init(|_| array_init(|_| ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::empty(), mats.clone())));
 
-		let (desc_pool, desc_set) = create_desc_pool(&gfx, voxels.view, mats.view);
-		let (stencil_desc_pool, stencil_desc_set) = create_stencil_desc_pool(&gfx, voxels.view);
+		let off = zero();
 
-		Self { gfx, voxels, mats, desc_pool, desc_set, stencil_desc_pool, stencil_desc_set, set_cmds: vec![] }
+		let (desc_pool, desc_set) = create_desc_pool(
+			&gfx,
+			sdfs.iter().map(|x| x.iter().map(|x| x.view)).flatten(),
+			mats.iter().map(|x| x.iter().map(|x| x.view)).flatten(),
+		);
+		let (stencil_desc_pool, stencil_desc_set) =
+			create_stencil_desc_pool(&gfx, sdfs.iter().map(|x| x.iter().map(|x| x.view)).flatten());
+
+		Self { gfx, sdfs, mats, off, desc_pool, desc_set, stencil_desc_pool, stencil_desc_set, set_cmds: vec![] }
 	}
 
 	pub fn set_block(&mut self, pos: Vector3<u32>) {
@@ -62,17 +81,17 @@ impl World {
 
 	fn sample(&self, pos: Vector3<f32>) -> f32 {
 		let pos = v3max((pos * 4.0).add_scalar(-0.5), 0.0);
-		let (x, y, z) = (pos.x as usize, pos.y as usize, pos.z as usize);
-		let (tx, ty, tz) = (pos.x - x as f32, pos.y - y as f32, pos.z - z as f32);
+		let (x, y, z) = (pos.x.floor(), pos.y.floor(), pos.z as usize);
+		let (tx, ty, tz) = (pos.x - x, pos.y - y, pos.z - z as f32);
 
 		let c000 = self.sample_exact(x, y, z);
 		let c001 = self.sample_exact(x, y, z + 1);
-		let c010 = self.sample_exact(x, y + 1, z);
-		let c011 = self.sample_exact(x, y + 1, z + 1);
-		let c100 = self.sample_exact(x + 1, y, z);
-		let c101 = self.sample_exact(x + 1, y, z + 1);
-		let c110 = self.sample_exact(x + 1, y + 1, z);
-		let c111 = self.sample_exact(x + 1, y + 1, z + 1);
+		let c010 = self.sample_exact(x, y + 1.0, z);
+		let c011 = self.sample_exact(x, y + 1.0, z + 1);
+		let c100 = self.sample_exact(x + 1.0, y, z);
+		let c101 = self.sample_exact(x + 1.0, y, z + 1);
+		let c110 = self.sample_exact(x + 1.0, y + 1.0, z);
+		let c111 = self.sample_exact(x + 1.0, y + 1.0, z + 1);
 
 		let c00 = lerp(c000, c100, tx);
 		let c01 = lerp(c001, c101, tx);
@@ -85,8 +104,13 @@ impl World {
 		lerp(c0, c1, tz)
 	}
 
-	fn sample_exact(&self, x: usize, y: usize, z: usize) -> f32 {
-		(RANGE + 1.0) * (self.voxels.data[x][y][z] as f32) / 255.0 - 1.0
+	fn sample_exact(&self, x: f32, y: f32, z: usize) -> f32 {
+		let sdfy = ((y / 16.0).floor() - self.off.y as f32 + 10.0) as usize;
+		let sdfx = ((x / 16.0).floor() - self.off.x as f32 + 10.0) as usize;
+		let sdf = &self.sdfs[sdfy][sdfx];
+		let y = (y % 16.0 + 16.0) as usize;
+		let x = (x % 16.0 + 16.0) as usize;
+		(RANGE + 1.0) * (sdf.data[z][y][x] as f32) / 255.0 - 1.0
 	}
 }
 impl Drop for World {
@@ -98,14 +122,14 @@ impl Drop for World {
 
 pub(super) struct ChunkLayer {
 	gfx: Arc<Gfx>,
-	data: Box<[[[u8; 16]; 16]; 256]>,
+	data: Box<ChunkData>,
 	pub(super) image: vk::Image,
 	alloc: Allocation,
 	pub(super) view: vk::ImageView,
 }
 impl ChunkLayer {
-	fn new(gfx: Arc<Gfx>, usage: vk::ImageUsageFlags, data: Box<[[[u8; 16]; 16]; 256]>) -> Self {
-		let (buf, cpualloc, map) = create_cpu_buffer::<[[u8; 16]; 16]>(&gfx.allocator, 256);
+	fn new(gfx: Arc<Gfx>, usage: vk::ImageUsageFlags, data: Box<ChunkData>) -> Self {
+		let (buf, cpualloc, map) = create_cpu_buffer::<[[u8; 16 * RES]; 16 * RES]>(&gfx.allocator, 256 * RES);
 		map.copy_from_slice(&*data);
 		let (image, alloc, view) = create_device_local_image(
 			&gfx.device,
@@ -145,13 +169,12 @@ fn sd_cube(x: f32, y: f32, z: f32) -> f32 {
 	return l2.sqrt() + qx.max(qy.max(qz)).min(0.0);
 }
 
-fn init_voxels(voxels: &mut [[[u8; 16]; 16]; 256]) {
+fn init_sdf(voxels: &mut [[[u8; 16 * RES]; 16 * RES]; 256 * RES]) {
 	let resf = RES as f32;
-	let resu = RES as usize;
 
-	for z in 0..(256 * resu) {
-		for y in 0..(16 * resu) {
-			for x in 0..(16 * resu) {
+	for z in 0..(256 * RES) {
+		for y in 0..(16 * RES) {
+			for x in 0..(16 * RES) {
 				let px = x as f32 / resf;
 				let py = y as f32 / resf;
 				let pz = z as f32 / resf;
@@ -163,7 +186,7 @@ fn init_voxels(voxels: &mut [[[u8; 16]; 16]; 256]) {
 				sd = sd.min(sd_cube(px - 3.5, py - 3.5, pz - 8.5));
 
 				let d = 255.0 * (sd + 1.0) / (RANGE + 1.0);
-				voxels[x][y][z] = (d.round() as i64).max(0).min(255) as u8;
+				voxels[z][y][x] = (d.round() as i64).max(0).min(255) as u8;
 			}
 		}
 	}
@@ -171,11 +194,14 @@ fn init_voxels(voxels: &mut [[[u8; 16]; 16]; 256]) {
 
 fn create_desc_pool(
 	gfx: &Gfx,
-	voxels_view: vk::ImageView,
-	mats_view: vk::ImageView,
+	voxel_views: impl IntoIterator<Item = vk::ImageView>,
+	mat_views: impl IntoIterator<Item = vk::ImageView>,
 ) -> (vk::DescriptorPool, vk::DescriptorSet) {
-	let pool_sizes =
-		[vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER).descriptor_count(2).build()];
+	let pool_sizes = [
+		vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::SAMPLER).descriptor_count(2).build(),
+		vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::SAMPLED_IMAGE).descriptor_count(441).build(),
+		vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::SAMPLED_IMAGE).descriptor_count(441).build(),
+	];
 	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(1).pool_sizes(&pool_sizes);
 	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
 
@@ -183,26 +209,36 @@ fn create_desc_pool(
 	let ci = vk::DescriptorSetAllocateInfo::builder().descriptor_pool(desc_pool).set_layouts(&set_layouts);
 	let desc_set = unsafe { gfx.device.allocate_descriptor_sets(&ci) }.unwrap()[0];
 
-	let voxels_info = [vk::DescriptorImageInfo::builder()
-		.image_view(voxels_view)
-		.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-		.build()];
-	let mats_info = [vk::DescriptorImageInfo::builder()
-		.image_view(mats_view)
-		.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-		.build()];
+	let voxel_infos: Vec<_> = voxel_views
+		.into_iter()
+		.map(|image_view| {
+			vk::DescriptorImageInfo::builder()
+				.image_view(image_view)
+				.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+				.build()
+		})
+		.collect();
+	let mat_infos: Vec<_> = mat_views
+		.into_iter()
+		.map(|image_view| {
+			vk::DescriptorImageInfo::builder()
+				.image_view(image_view)
+				.image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+				.build()
+		})
+		.collect();
 	let write = [
 		vk::WriteDescriptorSet::builder()
 			.dst_set(desc_set)
-			.dst_binding(0)
-			.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-			.image_info(&voxels_info)
+			.dst_binding(1)
+			.descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+			.image_info(&voxel_infos)
 			.build(),
 		vk::WriteDescriptorSet::builder()
 			.dst_set(desc_set)
-			.dst_binding(1)
-			.descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-			.image_info(&mats_info)
+			.dst_binding(2)
+			.descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+			.image_info(&mat_infos)
 			.build(),
 	];
 	unsafe { gfx.device.update_descriptor_sets(&write, &[]) };
@@ -210,23 +246,30 @@ fn create_desc_pool(
 	(desc_pool, desc_set)
 }
 
-fn create_stencil_desc_pool(gfx: &Gfx, voxels_view: vk::ImageView) -> (vk::DescriptorPool, vk::DescriptorSet) {
+fn create_stencil_desc_pool(
+	gfx: &Gfx,
+	voxel_views: impl IntoIterator<Item = vk::ImageView>,
+) -> (vk::DescriptorPool, vk::DescriptorSet) {
 	let pool_sizes =
-		[vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::STORAGE_IMAGE).descriptor_count(1).build()];
+		[vk::DescriptorPoolSize::builder().ty(vk::DescriptorType::STORAGE_IMAGE).descriptor_count(882).build()];
 	let ci = vk::DescriptorPoolCreateInfo::builder().max_sets(1).pool_sizes(&pool_sizes);
 	let desc_pool = unsafe { gfx.device.create_descriptor_pool(&ci, None) }.unwrap();
 
-	let set_layouts = [gfx.world_desc_layout];
+	let set_layouts = [gfx.stencil_desc_layout];
 	let ci = vk::DescriptorSetAllocateInfo::builder().descriptor_pool(desc_pool).set_layouts(&set_layouts);
 	let desc_set = unsafe { gfx.device.allocate_descriptor_sets(&ci) }.unwrap()[0];
 
-	let voxels_info =
-		[vk::DescriptorImageInfo::builder().image_view(voxels_view).image_layout(vk::ImageLayout::GENERAL).build()];
+	let voxel_infos: Vec<_> = voxel_views
+		.into_iter()
+		.map(|image_view| {
+			vk::DescriptorImageInfo::builder().image_view(image_view).image_layout(vk::ImageLayout::GENERAL).build()
+		})
+		.collect();
 	let write = [vk::WriteDescriptorSet::builder()
 		.dst_set(desc_set)
 		.dst_binding(0)
 		.descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-		.image_info(&voxels_info)
+		.image_info(&voxel_infos)
 		.build()];
 	unsafe { gfx.device.update_descriptor_sets(&write, &[]) };
 

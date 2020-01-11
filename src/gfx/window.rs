@@ -197,51 +197,51 @@ impl Window {
 			let bi = vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 			self.gfx.device.begin_command_buffer(frame_data.primary, &bi).unwrap();
 
-			for set_cmd in world.set_cmds.drain(..) {
-				transition_layout(
-					&self.gfx.device,
-					frame_data.primary,
-					world.voxels.image,
-					1,
-					vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-					vk::ImageLayout::GENERAL,
-					vk::PipelineStageFlags::FRAGMENT_SHADER,
-					vk::PipelineStageFlags::COMPUTE_SHADER,
-				);
+			// for set_cmd in world.set_cmds.drain(..) {
+			// 	transition_layout(
+			// 		&self.gfx.device,
+			// 		frame_data.primary,
+			// 		world.sdfs.image,
+			// 		1,
+			// 		vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+			// 		vk::ImageLayout::GENERAL,
+			// 		vk::PipelineStageFlags::FRAGMENT_SHADER,
+			// 		vk::PipelineStageFlags::COMPUTE_SHADER,
+			// 	);
 
-				self.gfx.device.cmd_push_constants(
-					frame_data.primary,
-					self.gfx.stencil_pipeline_layout,
-					vk::ShaderStageFlags::COMPUTE,
-					0,
-					slice::from_raw_parts(&set_cmd as *const _ as _, size_of::<Vector3<u32>>()),
-				);
-				self.gfx.device.cmd_bind_pipeline(
-					frame_data.primary,
-					vk::PipelineBindPoint::COMPUTE,
-					self.gfx.stencil_pipeline,
-				);
-				self.gfx.device.cmd_bind_descriptor_sets(
-					frame_data.primary,
-					vk::PipelineBindPoint::COMPUTE,
-					self.gfx.stencil_pipeline_layout,
-					0,
-					&[world.stencil_desc_set],
-					&[],
-				);
-				self.gfx.device.cmd_dispatch(frame_data.primary, 21, 21, 21);
+			// 	self.gfx.device.cmd_push_constants(
+			// 		frame_data.primary,
+			// 		self.gfx.stencil_pipeline_layout,
+			// 		vk::ShaderStageFlags::COMPUTE,
+			// 		0,
+			// 		slice::from_raw_parts(&set_cmd as *const _ as _, size_of::<Vector3<u32>>()),
+			// 	);
+			// 	self.gfx.device.cmd_bind_pipeline(
+			// 		frame_data.primary,
+			// 		vk::PipelineBindPoint::COMPUTE,
+			// 		self.gfx.stencil_pipeline,
+			// 	);
+			// 	self.gfx.device.cmd_bind_descriptor_sets(
+			// 		frame_data.primary,
+			// 		vk::PipelineBindPoint::COMPUTE,
+			// 		self.gfx.stencil_pipeline_layout,
+			// 		0,
+			// 		&[world.stencil_desc_set],
+			// 		&[],
+			// 	);
+			// 	self.gfx.device.cmd_dispatch(frame_data.primary, 21, 21, 21);
 
-				transition_layout(
-					&self.gfx.device,
-					frame_data.primary,
-					world.voxels.image,
-					1,
-					vk::ImageLayout::GENERAL,
-					vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-					vk::PipelineStageFlags::COMPUTE_SHADER,
-					vk::PipelineStageFlags::FRAGMENT_SHADER,
-				);
-			}
+			// 	transition_layout(
+			// 		&self.gfx.device,
+			// 		frame_data.primary,
+			// 		world.sdfs.image,
+			// 		1,
+			// 		vk::ImageLayout::GENERAL,
+			// 		vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+			// 		vk::PipelineStageFlags::COMPUTE_SHADER,
+			// 		vk::PipelineStageFlags::FRAGMENT_SHADER,
+			// 	);
+			// }
 
 			let ci = vk::RenderPassBeginInfo::builder()
 				.render_pass(self.render_pass)

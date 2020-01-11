@@ -3,9 +3,10 @@
 
 #ifdef USE_VULKAN
 layout(location = 0) out vec4 out_color;
-layout(set = 0, binding = 0) uniform sampler2D blocks[2];
-layout(set = 1, binding = 0) uniform sampler3D voxels;
-layout(set = 1, binding = 1) uniform sampler3D mats;
+layout(set = 0, binding = 0) uniform sampler2D textures[2];
+layout(set = 1, binding = 0) uniform sampler samplers[2];
+layout(set = 1, binding = 1) uniform texture3D sdfs[441];
+layout(set = 1, binding = 2) uniform texture3D mats[441];
 layout(push_constant) uniform PushConsts {
 	vec3 cam_pos;
 	vec4 cam_rot;
@@ -15,9 +16,9 @@ const vec2 iResolution = vec2(1440.0, 810.0);
 #define CAMPOS pc.cam_pos
 #define PIXOUT out_color
 #else
-uniform sampler3D voxels;
+uniform sampler3D sdfs;
 uniform sampler3D mats;
-uniform sampler2D blocks[2];
+uniform sampler2D textures[2];
 uniform vec3 cam_pos;
 uniform vec4 cam_rot;
 uniform vec2 iResolution;
@@ -58,16 +59,16 @@ float F(vec3 pos) {
 	//if (gl_FragCoord.x < iResolution.x/2.0) return d;
 
 	const float range = 10.0;
-	const vec3 BlockSize = vec3(16.0, 16.0, 256.0);
-	vec3 tc = (pos + vec3(GridSize * 0.5)) / BlockSize;
-	tc = clamp(tc, 1.0 / BlockSize, 1.0 - 1.0 / BlockSize);
-	return min(pos.z, texture(voxels, tc).r * (range + 1.0) - 1.0);
+	const vec3 texturesize = vec3(16.0, 16.0, 256.0);
+	vec3 tc = (pos + vec3(GridSize * 0.5)) / texturesize;
+	tc = clamp(tc, 1.0 / texturesize, 1.0 - 1.0 / texturesize);
+	return min(pos.z, texture(sampler3D(sdfs[220], samplers[0]), tc).r * (range + 1.0) - 1.0);
 }
 float getTextureID(vec3 pos, vec3 nor) {
 	for(int i=0;i<4;i++) pos -= nor * (F(pos) + MinStepSize * 2.0);
-	const vec3 BlockSize = vec3(16.0, 16.0, 256.0);
-	vec3 tc = (pos - nor * GridSize * MinStepSize) / BlockSize;
-	return texture(mats, tc).r * 255.0;
+	const vec3 texturesize = vec3(16.0, 16.0, 256.0);
+	vec3 tc = (pos - nor * GridSize * MinStepSize) / texturesize;
+	return texture(sampler3D(mats[220], samplers[1]), tc).r * 255.0;
 }
 vec4 T(vec2 uv, vec2 dx, vec2 dy, float i) {
 	uv.x = mod(uv.x, 1.0) + i;
@@ -80,7 +81,7 @@ vec4 T(vec2 uv, vec2 dx, vec2 dy, float i) {
 	margin = max(margin, 0.05 / TextureResolution);
 	uv.x = clamp(uv.x, i*0.125 + margin, (i+1.0)*0.125 - margin);
 
-	return textureGrad(blocks[0], uv, dx, dy);
+	return textureGrad(textures[0], uv, dx, dy);
 }
 vec4 T2(vec2 uv, vec2 dx, vec2 dy, float i) {
 	uv.x = mod(uv.x, 1.0) + i;
@@ -92,7 +93,7 @@ vec4 T2(vec2 uv, vec2 dx, vec2 dy, float i) {
 	margin = max(margin, 0.05 / TextureResolution);
 	uv.x = clamp(uv.x, i*0.125 + margin, (i+1.0)*0.125 - margin);
 
-	return textureGrad(blocks[1], uv, dx, dy);
+	return textureGrad(textures[1], uv, dx, dy);
 }
 
 float shadowRay(vec3 pos, vec3 dir) {
