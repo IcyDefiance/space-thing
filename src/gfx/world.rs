@@ -8,8 +8,9 @@ use array_init::array_init;
 use ash::{version::DeviceV1_0, vk};
 use nalgebra::{zero, Vector2, Vector3};
 use std::{
-	alloc::{alloc, alloc_zeroed, Layout},
-	mem::MaybeUninit,
+	alloc::{alloc, Layout},
+	mem::size_of,
+	ptr::write_bytes,
 	sync::Arc,
 };
 use vk_mem::Allocation;
@@ -43,7 +44,8 @@ impl World {
 		let sdfs: ChunkArray =
 			array_init(|_| array_init(|_| ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::STORAGE, sdf.clone())));
 
-		let mats: Box<ChunkData> = unsafe { Box::from_raw(alloc_zeroed(Layout::new::<ChunkData>()) as _) };
+		let mut mats: Box<ChunkData> = unsafe { Box::from_raw(alloc(Layout::new::<ChunkData>()) as _) };
+		unsafe { write_bytes(mats.as_mut_ptr(), 1, 256 * RES) };
 		let mats: ChunkArray =
 			array_init(|_| array_init(|_| ChunkLayer::new(gfx.clone(), vk::ImageUsageFlags::empty(), mats.clone())));
 
